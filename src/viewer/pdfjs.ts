@@ -28,12 +28,17 @@ export async function loadPdfDocument(
   return loadingTask.promise;
 }
 
-export async function renderPageToCanvas(
+export type PageRenderHandle = {
+  promise: Promise<{ width: number; height: number }>;
+  cancel: () => void;
+};
+
+export function renderPageToCanvas(
   page: PDFPageProxy,
   canvas: HTMLCanvasElement,
   scale: number,
   rotation: number = 0,
-): Promise<{ width: number; height: number }> {
+): PageRenderHandle {
   const viewport = page.getViewport({ scale, rotation });
   const outputScale = window.devicePixelRatio || 1;
   canvas.width = Math.floor(viewport.width * outputScale);
@@ -49,14 +54,26 @@ export async function renderPageToCanvas(
   const transform =
     outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined;
 
-  await page.render({
+  const task = page.render({
     canvasContext: ctx,
     viewport,
     canvas,
     transform,
-  }).promise;
+  });
 
-  return { width: viewport.width, height: viewport.height };
+  return {
+    promise: task.promise.then(() => ({
+      width: viewport.width,
+      height: viewport.height,
+    })),
+    cancel: () => {
+      try {
+        task.cancel();
+      } catch {
+        // ignore cancel races
+      }
+    },
+  };
 }
 
 export async function getPageTextContent(page: PDFPageProxy): Promise<{

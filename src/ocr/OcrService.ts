@@ -46,7 +46,8 @@ export async function renderPageToImageData(
   scale = 2,
 ): Promise<{ imageData: ImageData; width: number; height: number }> {
   const canvas = document.createElement('canvas');
-  const { width, height } = await renderPageToCanvas(page, canvas, scale, 0);
+  const { width, height } = await renderPageToCanvas(page, canvas, scale, 0)
+    .promise;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas 2D context unavailable');
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);

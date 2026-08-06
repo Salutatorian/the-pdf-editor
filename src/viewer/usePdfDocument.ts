@@ -100,7 +100,7 @@ export function usePdfDocument(bytes: Uint8Array | null): UsePdfDocumentResult {
       const page = await getPage(pageIndex);
       if (!page) return null;
       const canvas = document.createElement('canvas');
-      await renderPageToCanvas(page, canvas, scale, 0);
+      await renderPageToCanvas(page, canvas, scale, 0).promise;
       const dataUrl = canvas.toDataURL('image/png');
       thumbCache.current.set(pageIndex, dataUrl);
       return dataUrl;

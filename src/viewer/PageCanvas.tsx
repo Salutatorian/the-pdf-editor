@@ -63,10 +63,13 @@ export function PageCanvas({
     if (!canvas) return;
     const gen = ++renderGen.current;
     let cancelled = false;
+    let cancelRender: (() => void) | null = null;
 
     async function render(): Promise<void> {
       try {
-        const size = await renderPageToCanvas(page, canvas!, scale, rotation);
+        const handle = renderPageToCanvas(page, canvas!, scale, rotation);
+        cancelRender = handle.cancel;
+        const size = await handle.promise;
         if (cancelled || gen !== renderGen.current) return;
         setCssSize(size);
         onRendered?.(size);
@@ -101,6 +104,9 @@ export function PageCanvas({
         }
         setTextSpans(spans);
       } catch (err) {
+        if (cancelled) return;
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.toLowerCase().includes('cancel')) return;
         console.error('PageCanvas render failed', err);
       }
     }
@@ -108,6 +114,7 @@ export function PageCanvas({
     void render();
     return () => {
       cancelled = true;
+      cancelRender?.();
     };
   }, [page, pageIndex, scale, rotation, searchQuery, onRendered]);
 
