@@ -17,8 +17,24 @@ import {
   Hand,
   Type,
   PenLine,
+  Image as ImageIcon,
+  CheckSquare,
+  Calendar,
+  Highlighter,
+  Pencil,
+  Square,
+  ALargeSmall,
+  Eraser,
+  Wrench,
+  FileArchive,
+  Lock,
+  Unlock,
+  GitCompare,
+  ScanText,
 } from 'lucide-react';
 import { MODES, type AppMode } from './modes';
+import type { OverlayKind } from '../document/types';
+import { ADD_MODE_TOOLS } from '../overlay/tools';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -31,7 +47,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 
-export type AddTool = 'select' | 'text' | 'sign' | 'hand';
+export type AddTool = 'select' | 'hand' | OverlayKind;
 
 export type TopToolbarProps = {
   mode: AppMode;
@@ -43,6 +59,7 @@ export type TopToolbarProps = {
   searchQuery?: string;
   smartFill?: boolean;
   addTool?: AddTool;
+  hasDocument?: boolean;
   onOpen?: () => void;
   onSave?: () => void;
   onSaveAs?: () => void;
@@ -58,6 +75,26 @@ export type TopToolbarProps = {
   onSearchSubmit?: () => void;
   onSmartFillChange?: (enabled: boolean) => void;
   onAddToolChange?: (tool: AddTool) => void;
+  onCompress?: () => void;
+  onProtect?: () => void;
+  onUnlock?: () => void;
+  onCompare?: () => void;
+  onOcr?: () => void;
+};
+
+const ADD_TOOL_ICONS: Record<
+  Exclude<AddTool, 'select' | 'hand' | 'signature'>,
+  typeof Type
+> = {
+  text: Type,
+  image: ImageIcon,
+  checkmark: CheckSquare,
+  date: Calendar,
+  initials: ALargeSmall,
+  highlight: Highlighter,
+  draw: Pencil,
+  shape: Square,
+  redact: Eraser,
 };
 
 function Tip({
@@ -92,6 +129,7 @@ export function TopToolbar({
   searchQuery = '',
   smartFill = false,
   addTool = 'select',
+  hasDocument = false,
   onOpen,
   onSave,
   onSaveAs,
@@ -107,6 +145,11 @@ export function TopToolbar({
   onSearchSubmit,
   onSmartFillChange,
   onAddToolChange,
+  onCompress,
+  onProtect,
+  onUnlock,
+  onCompare,
+  onOcr,
 }: TopToolbarProps) {
   const onSearchInput = (e: ChangeEvent<HTMLInputElement>) => {
     onSearchChange?.(e.target.value);
@@ -326,6 +369,7 @@ export function TopToolbar({
               }}
               variant="outline"
               size="sm"
+              className="max-w-[min(42vw,28rem)] flex-wrap justify-start"
             >
               <ToggleGroupItem value="select" aria-label="Select" className="size-7 p-0">
                 <MousePointer2 className="size-3.5" />
@@ -333,14 +377,25 @@ export function TopToolbar({
               <ToggleGroupItem value="hand" aria-label="Pan" className="size-7 p-0">
                 <Hand className="size-3.5" />
               </ToggleGroupItem>
-              {mode === 'add' ? (
-                <ToggleGroupItem value="text" aria-label="Text" className="size-7 p-0">
-                  <Type className="size-3.5" />
-                </ToggleGroupItem>
-              ) : null}
+              {mode === 'add'
+                ? ADD_MODE_TOOLS.map((tool) => {
+                    const Icon = ADD_TOOL_ICONS[tool.kind as keyof typeof ADD_TOOL_ICONS];
+                    return (
+                      <ToggleGroupItem
+                        key={tool.id}
+                        value={tool.kind}
+                        aria-label={tool.label}
+                        title={tool.label}
+                        className="size-7 p-0"
+                      >
+                        {Icon ? <Icon className="size-3.5" /> : tool.label[0]}
+                      </ToggleGroupItem>
+                    );
+                  })
+                : null}
               {mode === 'sign' ? (
                 <ToggleGroupItem
-                  value="sign"
+                  value="signature"
                   aria-label="Signature"
                   className="size-7 p-0"
                 >
@@ -348,6 +403,87 @@ export function TopToolbar({
                 </ToggleGroupItem>
               ) : null}
             </ToggleGroup>
+          </>
+        ) : null}
+
+        {hasDocument ? (
+          <>
+            <Separator orientation="vertical" className="h-5" />
+            <div className="hidden items-center gap-0.5 lg:flex" role="group" aria-label="Tools">
+              <Tip label="Compress">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Compress"
+                  onClick={onCompress}
+                >
+                  <FileArchive />
+                </Button>
+              </Tip>
+              <Tip label="Protect">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Protect PDF"
+                  onClick={onProtect}
+                >
+                  <Lock />
+                </Button>
+              </Tip>
+              <Tip label="Unlock">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Unlock PDF"
+                  onClick={onUnlock}
+                >
+                  <Unlock />
+                </Button>
+              </Tip>
+              <Tip label="Compare…">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Compare documents"
+                  onClick={onCompare}
+                >
+                  <GitCompare />
+                </Button>
+              </Tip>
+              <Tip label="OCR page">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="OCR page"
+                  onClick={onOcr}
+                >
+                  <ScanText />
+                </Button>
+              </Tip>
+            </div>
+            <details className="relative lg:hidden">
+              <summary className="flex h-7 w-7 cursor-pointer list-none items-center justify-center rounded-md text-muted-foreground hover:bg-muted">
+                <Wrench className="size-3.5" />
+                <span className="sr-only">Tools</span>
+              </summary>
+              <div className="absolute right-0 z-50 mt-1 flex min-w-[9rem] flex-col gap-0.5 rounded-md border border-border bg-card p-1 shadow-md">
+                <Button variant="ghost" size="sm" className="justify-start text-[11px]" onClick={onCompress}>
+                  Compress
+                </Button>
+                <Button variant="ghost" size="sm" className="justify-start text-[11px]" onClick={onProtect}>
+                  Protect
+                </Button>
+                <Button variant="ghost" size="sm" className="justify-start text-[11px]" onClick={onUnlock}>
+                  Unlock
+                </Button>
+                <Button variant="ghost" size="sm" className="justify-start text-[11px]" onClick={onCompare}>
+                  Compare…
+                </Button>
+                <Button variant="ghost" size="sm" className="justify-start text-[11px]" onClick={onOcr}>
+                  OCR page
+                </Button>
+              </div>
+            </details>
           </>
         ) : null}
 

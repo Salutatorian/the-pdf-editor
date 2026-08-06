@@ -111,6 +111,14 @@ function OverlayNode({
           opacity={(overlay.opacity ?? 1) * 0.35}
         />
       );
+    case 'redact':
+      return (
+        <Rect
+          {...common}
+          fill="#000000"
+          opacity={1}
+        />
+      );
     case 'checkmark':
       return (
         <Text
@@ -256,6 +264,8 @@ function defaultOverlayFromTool(
     case 'image':
     case 'signature':
       return base;
+    case 'redact':
+      return { ...base, color: '#000000', opacity: 1 };
     default: {
       const _exhaustive: never = tool.kind;
       return _exhaustive;
@@ -342,7 +352,7 @@ export function OverlayEditor({
         onRequestSignature?.({ x, y });
         return;
       }
-      if (activeTool === 'draw' || activeTool === 'highlight') {
+      if (activeTool === 'draw' || activeTool === 'highlight' || activeTool === 'redact') {
         return;
       }
 
@@ -363,7 +373,7 @@ export function OverlayEditor({
     const pt = toPagePoint(pos.x, pos.y);
     if (activeTool === 'draw') {
       setDrawing([pt]);
-    } else if (activeTool === 'highlight') {
+    } else if (activeTool === 'highlight' || activeTool === 'redact') {
       setHighlightDraft({ x: pt.x, y: pt.y, width: 0, height: 0 });
     }
   };
@@ -418,16 +428,17 @@ export function OverlayEditor({
       if (w > 2 && h > 2) {
         const zIndex =
           pageOverlays.reduce((m, o) => Math.max(m, o.zIndex), 0) + 1;
+        const isRedact = activeTool === 'redact';
         onAdd({
           pageIndex,
-          kind: 'highlight',
+          kind: isRedact ? 'redact' : 'highlight',
           x,
           y,
           width: w,
           height: h,
           rotation: 0,
           zIndex,
-          color: '#ffe566',
+          color: isRedact ? '#000000' : '#ffe566',
           opacity: 1,
         });
       }
@@ -525,8 +536,8 @@ export function OverlayEditor({
             y={Math.min(highlightDraft.y, highlightDraft.y + highlightDraft.height) * scale}
             width={Math.abs(highlightDraft.width) * scale}
             height={Math.abs(highlightDraft.height) * scale}
-            fill="#ffe566"
-            opacity={0.35}
+            fill={activeTool === 'redact' ? '#000000' : '#ffe566'}
+            opacity={activeTool === 'redact' ? 1 : 0.35}
           />
         ) : null}
 

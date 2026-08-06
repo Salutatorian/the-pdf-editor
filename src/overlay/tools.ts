@@ -83,7 +83,20 @@ export const ADD_TOOLS: readonly AddToolDef[] = [
     defaultHeight: 60,
     shortcut: 'G',
   },
+  {
+    id: 'redact',
+    label: 'Redact',
+    kind: 'redact',
+    defaultWidth: 120,
+    defaultHeight: 24,
+    shortcut: 'R',
+  },
 ] as const;
+
+/** Tools shown in Add mode (excludes signature — Sign mode only). */
+export const ADD_MODE_TOOLS: readonly AddToolDef[] = ADD_TOOLS.filter(
+  (t) => t.kind !== 'signature',
+);
 
 export function toolByShortcut(letter: string): AddToolDef | undefined {
   const key = letter.toUpperCase();

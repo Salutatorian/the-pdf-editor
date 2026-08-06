@@ -209,6 +209,18 @@ function drawOverlay(
       });
       break;
     }
+    case 'redact': {
+      // Opaque black rectangle — visual redaction (content may still exist underneath).
+      page.drawRectangle({
+        x: overlay.x,
+        y: pdfY,
+        width: overlay.width,
+        height: overlay.height,
+        color: rgb(0, 0, 0),
+        opacity: 1,
+      });
+      break;
+    }
     case 'checkmark': {
       page.drawText('✓', {
         x: overlay.x + overlay.width * 0.15,

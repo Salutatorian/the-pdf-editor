@@ -1,4 +1,4 @@
-export type AppMode = "open" | "view" | "fill" | "add" | "sign";
+export type AppMode = "open" | "view" | "fill" | "add" | "sign" | "organize";
 
 export type ModeMeta = {
   id: AppMode;
@@ -37,6 +37,12 @@ export const MODES: readonly ModeMeta[] = [
     label: "Sign",
     description: "Place visual signature images",
     shortcut: "4",
+  },
+  {
+    id: "organize",
+    label: "Organize",
+    description: "Reorder, rotate, extract, merge, and delete pages",
+    shortcut: "5",
   },
 ] as const;
 

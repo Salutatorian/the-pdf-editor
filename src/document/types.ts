@@ -1,4 +1,4 @@
-export type AppMode = 'open' | 'view' | 'fill' | 'add' | 'sign';
+export type AppMode = 'open' | 'view' | 'fill' | 'add' | 'sign' | 'organize';
 
 export type OverlayKind =
   | 'text'
@@ -9,7 +9,8 @@ export type OverlayKind =
   | 'highlight'
   | 'draw'
   | 'shape'
-  | 'signature';
+  | 'signature'
+  | 'redact';
 
 export type ShapeType = 'rect' | 'ellipse' | 'line';
 

@@ -18,6 +18,7 @@ import { useKeyboardShortcuts } from './app/shortcuts.ts';
 import { useDocumentStore } from './document/documentStore.ts';
 import type {
   DocumentMeta,
+  FormField,
   OverlayKind,
   OverlayObject,
 } from './document/types.ts';
@@ -33,13 +34,41 @@ import {
   verifiedSave,
   type SaveResult,
 } from './export/SavePipeline.ts';
+import { compressPdf } from './export/compressPdf.ts';
 import { OverlayEditor } from './overlay/OverlayEditor.tsx';
 import { nudgeDelta } from './overlay/alignment.ts';
+import {
+  deletePages,
+  duplicatePage,
+  extractPages,
+  mergePdfs,
+  reorderPages,
+  rotatePages,
+} from './organizer/PageOrganizer.ts';
+import { OrganizePanel } from './organizer/OrganizePanel.tsx';
+import {
+  remapFieldsAfterDelete,
+  remapFieldsAfterReorder,
+  remapOverlaysAfterDelete,
+  remapOverlaysAfterDuplicate,
+  remapOverlaysAfterReorder,
+} from './organizer/organizeDocument.ts';
+import {
+  compareByteHash,
+  comparePageCounts,
+} from './compare/CompareDocs.ts';
+import {
+  ComparePanel,
+  type CompareResultView,
+} from './compare/ComparePanel.tsx';
+import { OcrPanel } from './ocr/OcrPanel.tsx';
+import type { OcrTextItem } from './ocr/OcrService.ts';
 import {
   isTauri,
   openPdfDialog,
   pickSavePath,
   readPdfFromPath,
+  saveBytes,
 } from './persistence/fileService.ts';
 import { createSaveIO } from './persistence/tauriSaveIO.ts';
 import {
@@ -47,6 +76,11 @@ import {
   listRecentFiles,
 } from './persistence/recentFiles.ts';
 import { clearDraft, saveDraft } from './persistence/drafts.ts';
+import { protectPdf, unlockPdf } from './security/PdfSecurity.ts';
+import {
+  PasswordDialog,
+  type PasswordDialogMode,
+} from './security/PasswordDialog.tsx';
 import {
   cleanupSignaturePng,
   saveSignature,
@@ -138,6 +172,16 @@ function AppInner() {
   });
   const [focusedFieldId, setFocusedFieldId] = useState<string | null>(null);
   const [thumbs, setThumbs] = useState<ThumbnailItem[]>([]);
+  const [organizeSelected, setOrganizeSelected] = useState<number[]>([]);
+  const [passwordDialog, setPasswordDialog] = useState<{
+    open: boolean;
+    mode: PasswordDialogMode;
+    error: string | null;
+  }>({ open: false, mode: 'unlock', error: null });
+  const [ocrOpen, setOcrOpen] = useState(false);
+  const [compareResult, setCompareResult] = useState<CompareResultView | null>(
+    null,
+  );
   const searchCursor = useRef<(typeof searchMatches)[0] | null>(null);
   const saveIo = useMemo(() => createSaveIO(), []);
 
@@ -435,10 +479,54 @@ function AppInner() {
   );
 
   const activeOverlayTool: OverlayKind | null = useMemo(() => {
-    if (mode === 'add' && addTool === 'text') return 'text';
-    if (mode === 'sign' && addTool === 'sign') return 'signature';
+    if (mode === 'sign' && addTool === 'signature') return 'signature';
+    if (mode === 'add' && addTool !== 'select' && addTool !== 'hand') {
+      return addTool;
+    }
     return null;
   }, [mode, addTool]);
+
+  const applyOrganizedDocument = useCallback(
+    (
+      newBytes: Uint8Array,
+      nextOverlays: OverlayObject[],
+      nextFields: FormField[],
+      status: string,
+    ) => {
+      void PDFDocument.load(newBytes, {
+        ignoreEncryption: true,
+        updateMetadata: false,
+      }).then((pdf) => {
+        const nextPageCount = pdf.getPageCount();
+        useDocumentStore.setState((s) => {
+          if (!s.meta) return;
+          s.documentBytes = newBytes;
+          s.meta = {
+            ...s.meta,
+            pageCount: nextPageCount,
+            fileSize: newBytes.byteLength,
+            lastModified: Date.now(),
+          };
+          s.pageCount = nextPageCount;
+          s.overlays = nextOverlays;
+          s.formFields = nextFields;
+          s.dirty = true;
+          s.currentPage = Math.min(
+            s.currentPage,
+            Math.max(0, nextPageCount - 1),
+          );
+          s.selectedIds = [];
+          s.smartFillSuggestions = [];
+          s.undoStack = [];
+          s.redoStack = [];
+          s.statusMessage = status;
+          s.mode = 'organize';
+        });
+        setOrganizeSelected([]);
+      });
+    },
+    [],
+  );
 
   const onModeChange = useCallback(
     (next: AppMode) => {
@@ -448,13 +536,234 @@ function AppInner() {
       }
       store.setMode(next);
       if (next === 'add') setAddTool('text');
-      if (next === 'sign') setAddTool('sign');
-      if (next === 'view') setAddTool('select');
+      if (next === 'sign') setAddTool('signature');
+      if (next === 'view' || next === 'organize') setAddTool('select');
       if (next === 'fill' && smartFillOn) {
         void runSmartFill();
       }
+      if (next === 'organize') setOrganizeSelected([]);
     },
     [handleOpen, store, smartFillOn, runSmartFill],
+  );
+
+  const handleOrganizeReorder = useCallback(
+    async (newOrder: number[]) => {
+      if (!documentBytes) return;
+      try {
+        const next = await reorderPages(documentBytes, newOrder);
+        applyOrganizedDocument(
+          next,
+          remapOverlaysAfterReorder(overlays, newOrder),
+          remapFieldsAfterReorder(formFields, newOrder),
+          'Pages reordered',
+        );
+      } catch (err) {
+        store.setStatus(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [documentBytes, overlays, formFields, applyOrganizedDocument, store],
+  );
+
+  const handleOrganizeRotate = useCallback(
+    async (indexes: number[], deg: 90 | 180 | 270) => {
+      if (!documentBytes) return;
+      try {
+        const next = await rotatePages(documentBytes, indexes, deg);
+        applyOrganizedDocument(
+          next,
+          overlays,
+          formFields,
+          `Rotated ${indexes.length} page(s)`,
+        );
+      } catch (err) {
+        store.setStatus(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [documentBytes, overlays, formFields, applyOrganizedDocument, store],
+  );
+
+  const handleOrganizeDelete = useCallback(
+    async (indexes: number[]) => {
+      if (!documentBytes) return;
+      try {
+        const next = await deletePages(documentBytes, indexes);
+        applyOrganizedDocument(
+          next,
+          remapOverlaysAfterDelete(overlays, indexes),
+          remapFieldsAfterDelete(formFields, indexes),
+          `Deleted ${indexes.length} page(s)`,
+        );
+      } catch (err) {
+        store.setStatus(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [documentBytes, overlays, formFields, applyOrganizedDocument, store],
+  );
+
+  const handleOrganizeDuplicate = useCallback(
+    async (pageIndex: number) => {
+      if (!documentBytes) return;
+      try {
+        const next = await duplicatePage(documentBytes, pageIndex);
+        applyOrganizedDocument(
+          next,
+          remapOverlaysAfterDuplicate(overlays, pageIndex),
+          formFields.map((f) =>
+            f.pageIndex > pageIndex
+              ? { ...f, pageIndex: f.pageIndex + 1 }
+              : f,
+          ),
+          `Duplicated page ${pageIndex + 1}`,
+        );
+      } catch (err) {
+        store.setStatus(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [documentBytes, overlays, formFields, applyOrganizedDocument, store],
+  );
+
+  const handleOrganizeExtract = useCallback(
+    async (indexes: number[]) => {
+      if (!documentBytes || !meta) return;
+      try {
+        const extracted = await extractPages(documentBytes, indexes);
+        const target = await pickSavePath(
+          meta.fileName.replace(/\.pdf$/i, '') + '-extract.pdf',
+        );
+        if (!target) return;
+        await saveBytes(target, extracted);
+        store.setStatus(`Extracted ${indexes.length} page(s) → ${target}`);
+      } catch (err) {
+        store.setStatus(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [documentBytes, meta, store],
+  );
+
+  const handleOrganizeMerge = useCallback(async () => {
+    if (!documentBytes) return;
+    const opened = await openPdfDialog();
+    if (!opened) return;
+    try {
+      const next = await mergePdfs([documentBytes, opened.bytes]);
+      applyOrganizedDocument(
+        next,
+        overlays,
+        formFields,
+        `Merged with ${opened.name}`,
+      );
+    } catch (err) {
+      store.setStatus(err instanceof Error ? err.message : String(err));
+    }
+  }, [documentBytes, overlays, formFields, applyOrganizedDocument, store]);
+
+  const handleCompress = useCallback(async () => {
+    if (!documentBytes) return;
+    try {
+      const result = await compressPdf(documentBytes);
+      useDocumentStore.setState((s) => {
+        if (!s.meta) return;
+        s.documentBytes = result.bytes;
+        s.meta = {
+          ...s.meta,
+          fileSize: result.after,
+          lastModified: Date.now(),
+        };
+        s.dirty = true;
+        s.statusMessage = `Compressed ${formatBytes(result.before)} → ${formatBytes(result.after)}`;
+      });
+    } catch (err) {
+      store.setStatus(err instanceof Error ? err.message : String(err));
+    }
+  }, [documentBytes, store]);
+
+  const handleCompare = useCallback(async () => {
+    if (!documentBytes) return;
+    const opened = await openPdfDialog();
+    if (!opened) return;
+    try {
+      const [pageCounts, hashes] = await Promise.all([
+        comparePageCounts(documentBytes, opened.bytes),
+        compareByteHash(documentBytes, opened.bytes),
+      ]);
+      setCompareResult({ pageCounts, hashes, otherName: opened.name });
+      store.setStatus(
+        hashes.equal
+          ? `Compare: identical to ${opened.name}`
+          : `Compare: differs from ${opened.name}`,
+      );
+    } catch (err) {
+      store.setStatus(err instanceof Error ? err.message : String(err));
+    }
+  }, [documentBytes, store]);
+
+  const handlePasswordSubmit = useCallback(
+    async (password: string, ownerPassword?: string) => {
+      if (!documentBytes) return;
+      try {
+        if (passwordDialog.mode === 'unlock') {
+          const next = await unlockPdf(documentBytes, password);
+          useDocumentStore.setState((s) => {
+            if (!s.meta) return;
+            s.documentBytes = next;
+            s.meta = {
+              ...s.meta,
+              fileSize: next.byteLength,
+              lastModified: Date.now(),
+            };
+            s.dirty = true;
+            s.statusMessage = 'PDF unlocked (encryption stripped if present)';
+          });
+        } else {
+          const next = await protectPdf(
+            documentBytes,
+            password,
+            ownerPassword,
+          );
+          useDocumentStore.setState((s) => {
+            if (!s.meta) return;
+            s.documentBytes = next;
+            s.meta = {
+              ...s.meta,
+              fileSize: next.byteLength,
+              lastModified: Date.now(),
+            };
+            s.dirty = true;
+            s.statusMessage = 'PDF protected';
+          });
+        }
+        setPasswordDialog({ open: false, mode: 'unlock', error: null });
+      } catch (err) {
+        setPasswordDialog((d) => ({
+          ...d,
+          error: err instanceof Error ? err.message : String(err),
+        }));
+      }
+    },
+    [documentBytes, passwordDialog.mode],
+  );
+
+  const handleOcrSuggestions = useCallback(
+    (items: OcrTextItem[], pageWidth: number, pageHeight: number) => {
+      const hints: TextItemHint[] = items.map((item) => ({
+        str: item.str,
+        transform: item.transform,
+        width: item.width,
+        height: item.height,
+      }));
+      const suggestions = detectSmartFillSuggestions(
+        pageWidth,
+        pageHeight,
+        currentPage,
+        hints,
+      );
+      store.setSmartFillSuggestions(suggestions);
+      store.setMode('fill');
+      store.setStatus(
+        `OCR → Smart Fill: ${suggestions.length} suggestion(s) (PDF unchanged)`,
+      );
+    },
+    [currentPage, store],
   );
 
   const openSignatureAt = useCallback(
@@ -681,6 +990,7 @@ function AppInner() {
       searchQuery={searchQuery}
       smartFill={smartFillOn}
       addTool={addTool}
+      hasDocument={Boolean(documentBytes)}
       onOpen={() => void handleOpen()}
       onSave={() => void handleSave()}
       onSaveAs={() => void handleSaveAsFixed()}
@@ -696,6 +1006,15 @@ function AppInner() {
       onSearchSubmit={() => void handleSearchSubmit()}
       onSmartFillChange={onSmartFillChange}
       onAddToolChange={setAddTool}
+      onCompress={() => void handleCompress()}
+      onProtect={() =>
+        setPasswordDialog({ open: true, mode: 'protect', error: null })
+      }
+      onUnlock={() =>
+        setPasswordDialog({ open: true, mode: 'unlock', error: null })
+      }
+      onCompare={() => void handleCompare()}
+      onOcr={() => setOcrOpen(true)}
     />
   );
 
@@ -746,6 +1065,24 @@ function AppInner() {
             onOpen={() => void handleOpen()}
             onOpenRecent={(path, name) => void handleOpenRecent(path, name)}
             onFileInput={(file) => void handleDropFiles([file])}
+          />
+        ) : mode === 'organize' ? (
+          <OrganizePanel
+            pageCount={pageCount}
+            currentPage={currentPage}
+            thumbnails={thumbs}
+            selectedPages={organizeSelected}
+            onSelectPages={setOrganizeSelected}
+            onApplyReorder={(order) => void handleOrganizeReorder(order)}
+            onRotate={(indexes, deg) => void handleOrganizeRotate(indexes, deg)}
+            onDelete={(indexes) => void handleOrganizeDelete(indexes)}
+            onDuplicate={(i) => void handleOrganizeDuplicate(i)}
+            onExtract={(indexes) => void handleOrganizeExtract(indexes)}
+            onMergeRequest={() => void handleOrganizeMerge()}
+            onJump={(i) => {
+              store.setPage(i);
+              jumpViewerToPage(i);
+            }}
           />
         ) : (
           <PdfViewer
@@ -835,6 +1172,33 @@ function AppInner() {
         onConfirm={() => setSaveConfirm((s) => ({ ...s, open: false }))}
         onCancel={() => setSaveConfirm((s) => ({ ...s, open: false }))}
       />
+
+      <PasswordDialog
+        open={passwordDialog.open}
+        mode={passwordDialog.mode}
+        error={passwordDialog.error}
+        onClose={() =>
+          setPasswordDialog({ open: false, mode: 'unlock', error: null })
+        }
+        onSubmit={(pw, owner) => void handlePasswordSubmit(pw, owner)}
+      />
+
+      {!emptyState ? (
+        <OcrPanel
+          open={ocrOpen}
+          pageIndex={currentPage}
+          getPage={getPage}
+          onSuggestions={handleOcrSuggestions}
+          onClose={() => setOcrOpen(false)}
+        />
+      ) : null}
+
+      {compareResult ? (
+        <ComparePanel
+          result={compareResult}
+          onClose={() => setCompareResult(null)}
+        />
+      ) : null}
     </>
   );
 }
