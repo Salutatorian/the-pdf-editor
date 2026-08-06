@@ -1,0 +1,173 @@
+/* PDF viewer / form overlays — complementary to Tailwind shell */
+
+.pdf-viewer {
+  width: 100%;
+  min-height: 100%;
+}
+
+.pdf-viewer--empty {
+  display: grid;
+  place-items: center;
+  color: var(--muted-foreground);
+}
+
+.pdf-scroll {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 0 2rem;
+}
+
+.pdf-scroll__page {
+  flex-shrink: 0;
+}
+
+.page-canvas {
+  position: relative;
+  background: #fff;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+}
+
+.page-canvas--loading {
+  min-width: 320px;
+  min-height: 200px;
+  display: grid;
+  place-items: center;
+  color: var(--muted-foreground);
+  background: var(--card);
+}
+
+.page-canvas__pdf {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.page-canvas__text-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  line-height: 1;
+  opacity: 0.25;
+  pointer-events: none;
+  user-select: text;
+}
+
+.page-canvas__text-span {
+  position: absolute;
+  white-space: pre;
+  transform-origin: 0% 0%;
+  color: transparent;
+}
+
+.page-canvas__text-span--hit {
+  background: rgba(255, 214, 10, 0.55);
+  color: transparent;
+}
+
+.page-canvas__overlay {
+  position: absolute;
+  inset: 0;
+}
+
+.overlay-editor {
+  position: absolute !important;
+  inset: 0;
+}
+
+.form-overlay__field {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1.5px solid color-mix(in oklch, var(--primary) 85%, transparent);
+  background: color-mix(in oklch, var(--primary) 14%, transparent);
+  border-radius: 2px;
+  font-size: 12px;
+  padding: 0 4px;
+  color: #111;
+  user-select: text;
+}
+
+.form-overlay__field--checkbox,
+.form-overlay__field--radio {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.form-overlay__field--signature {
+  cursor: pointer;
+  font-size: 11px;
+  color: #1a4a8a;
+}
+
+.form-overlay__suggestion {
+  position: absolute;
+  border: 1.5px dashed color-mix(in oklch, var(--success) 90%, transparent);
+  background: color-mix(in oklch, var(--success) 12%, transparent);
+  border-radius: 3px;
+  padding: 2px 4px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 4px;
+  z-index: 5;
+}
+
+.form-overlay__suggestion-label {
+  font-size: 10px;
+  color: #1b5e20;
+  line-height: 1.2;
+}
+
+.form-overlay__suggestion-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.form-overlay__btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 10px;
+  padding: 2px 6px;
+  cursor: pointer;
+  background: var(--secondary);
+  color: var(--foreground);
+}
+
+.form-overlay__btn--confirm {
+  background: var(--success);
+  border-color: var(--success);
+  color: #0b1a12;
+}
+
+.form-overlay__btn--reject {
+  background: transparent;
+}
+
+@media print {
+  header,
+  footer,
+  aside,
+  .form-overlay__suggestion {
+    display: none !important;
+  }
+
+  .page-canvas {
+    box-shadow: none;
+    break-after: page;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
