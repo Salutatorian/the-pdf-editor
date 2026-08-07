@@ -361,7 +361,7 @@ function blankFillRectForLabel(
  * Text / date / signature require a real blank/underline line — no ghost fields.
  */
 export function detectSmartFillSuggestions(
-  pageWidth: number,
+  _pageWidth: number,
   pageHeight: number,
   pageIndex: number,
   textItems?: TextItemHint[],

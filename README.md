@@ -5,7 +5,7 @@
 Inspired by tools like [Stirling-PDF](https://github.com/Stirling-Tools/Stirling-PDF) for *what* a PDF toolkit should cover — built as an original desktop app focused on **fill → sign → save reliably**, not a hosted web service.
 
 <p align="center">
-  <img src="docs/screenshots/01-fill-demo.png" alt="pdf_editor Fill mode with demo intake form" width="900" />
+  <img src="docs/screenshots/05-welcome.png" alt="pdf_editor welcome — open a local PDF" width="900" />
 </p>
 
 <p align="center">
@@ -38,26 +38,36 @@ Installers are built for all three platforms on every release:
 
 → **[Latest release](https://github.com/Salutatorian/the-pdf-editor/releases/latest)**
 
-> Builds publish automatically via GitHub Actions when a version tag (e.g. `v0.1.0`) is pushed. If assets are still processing, check the [Actions](https://github.com/Salutatorian/the-pdf-editor/actions) tab.
+> Builds publish automatically via GitHub Actions when a version tag (e.g. `v1.2`) is pushed. If assets are still processing, check the [Actions](https://github.com/Salutatorian/the-pdf-editor/actions) tab.
 
 ## Screenshots
 
-### 1. Fill forms (hero)
-Open a PDF, jump into **Fill**, type into real AcroForm fields. Smart Fill can detect extra blanks — confirm before they stick.
+### 1. Welcome (Open)
+Drop a file or click **Open PDF**. Recent files stay on your machine only.
+
+![Welcome](docs/screenshots/05-welcome.png)
+
+### 2. Fill forms
+Jump into **Fill**, type into real AcroForm fields. Smart Fill can detect extra blanks — confirm before they stick.
 
 ![Fill mode](docs/screenshots/01-fill-demo.png)
 
-### 2. Signatures (ink only, reusable)
+### 3. Signatures (ink only, reusable)
 Draw, type, or import. Transparent ink — no white box. Save signatures locally and reuse them.
 
 ![Create signature](docs/screenshots/02-signature.png)
 
-### 3. Organize pages
+### 4. Move & resize signatures
+Select a signature to drag, resize, or rotate on the page.
+
+![Signature selected](docs/screenshots/06-signature-selected.png)
+
+### 5. Organize pages
 Reorder, rotate, duplicate, delete, extract, merge — without leaving the app.
 
 ![Organize pages](docs/screenshots/03-organize.png)
 
-### 4. Add Text tools
+### 6. Add Text tools
 Text, image, checkmark, date, initials, highlight, draw, shapes, redact.
 
 ![Add tools](docs/screenshots/04-add-tools.png)
@@ -68,6 +78,8 @@ Text, image, checkmark, date, initials, highlight, draw, shapes, redact.
 ```bash
 node scripts/generate-demo-pdf.mjs
 ```
+
+> **UI:** Ships **light mode only** (clean paper shell). Reshoot the older dark screenshots after updating if you want a fully matching gallery.
 
 ## Features
 

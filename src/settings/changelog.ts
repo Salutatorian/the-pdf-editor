@@ -18,6 +18,37 @@ export type ChangelogRelease = {
  */
 export const CHANGELOG: readonly ChangelogRelease[] = [
   {
+    version: '1.2.0',
+    title: 'Light UI · safer save · release builds',
+    date: '2026-08-07',
+    items: [
+      {
+        kind: 'improved',
+        text: 'Light mode only — clean paper shell (no dark theme)',
+      },
+      {
+        kind: 'added',
+        text: 'Windows, macOS, and Linux installers via GitHub Releases',
+      },
+      {
+        kind: 'fixed',
+        text: 'Open/switch PDF no longer freezes or kills mode buttons',
+      },
+      {
+        kind: 'fixed',
+        text: 'Save never deletes your original before replace succeeds',
+      },
+      {
+        kind: 'improved',
+        text: 'Hardened file paths, PDF size limits, and update URL allowlist',
+      },
+      {
+        kind: 'improved',
+        text: 'View/Fill scroll cleanly — overlays only capture clicks in Add/Sign',
+      },
+    ],
+  },
+  {
     version: '0.1.0',
     title: 'First desktop release',
     date: '2026-08-06',

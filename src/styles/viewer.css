@@ -92,13 +92,13 @@
 }
 
 .form-overlay__field:hover {
-  border-color: rgba(70, 120, 180, 0.35);
-  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(47, 127, 212, 0.45);
+  background: rgba(47, 127, 212, 0.08);
 }
 
 .form-overlay__field:focus {
-  border-color: rgba(70, 120, 180, 0.7);
-  background: rgba(255, 255, 255, 0.85);
+  border-color: rgba(47, 127, 212, 0.75);
+  background: rgba(255, 255, 255, 0.95);
   box-shadow: none;
 }
 

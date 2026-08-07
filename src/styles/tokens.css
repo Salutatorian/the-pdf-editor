@@ -1,38 +1,38 @@
 :root {
-  /* Surfaces */
-  --surface-0: #0e1012;
-  --surface-1: #121417;
-  --surface-2: #1a1d21;
-  --surface-3: #22262c;
-  --surface-4: #2a2f36;
+  /* Surfaces — light paper shell */
+  --surface-0: #f4f6f8;
+  --surface-1: #ffffff;
+  --surface-2: #eef1f4;
+  --surface-3: #e4e9ee;
+  --surface-4: #d8dee6;
 
   /* Borders */
-  --border: #2e343c;
-  --border-strong: #3a424c;
-  --border-focus: #3d9cf0;
+  --border: #d0d7e0;
+  --border-strong: #b4becb;
+  --border-focus: #2f7fd4;
 
   /* Text */
-  --text: #e8eaed;
-  --text-muted: #9aa3ad;
-  --text-faint: #6b737c;
+  --text: #1c2430;
+  --text-muted: #5b6775;
+  --text-faint: #8793a1;
 
   /* Accent — cool steel blue */
-  --accent: #3d9cf0;
-  --accent-hover: #5aadf5;
-  --accent-muted: rgba(61, 156, 240, 0.16);
-  --accent-border: rgba(61, 156, 240, 0.45);
+  --accent: #2f7fd4;
+  --accent-hover: #256db8;
+  --accent-muted: rgba(47, 127, 212, 0.12);
+  --accent-border: rgba(47, 127, 212, 0.4);
 
   /* Status */
-  --success: #3ecf8e;
-  --success-muted: rgba(62, 207, 142, 0.14);
-  --warning: #e6b84d;
-  --warning-muted: rgba(230, 184, 77, 0.14);
-  --error: #e85d5d;
-  --error-muted: rgba(232, 93, 93, 0.14);
+  --success: #1f9d63;
+  --success-muted: rgba(31, 157, 99, 0.12);
+  --warning: #c48a12;
+  --warning-muted: rgba(196, 138, 18, 0.12);
+  --error: #d14343;
+  --error-muted: rgba(209, 67, 67, 0.12);
 
   /* Canvas well */
-  --canvas-well: #0c0e10;
-  --canvas-dot: rgba(154, 163, 173, 0.14);
+  --canvas-well: #e8ecf1;
+  --canvas-dot: rgba(80, 95, 110, 0.16);
 
   /* Typography */
   --font-ui: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
@@ -74,9 +74,9 @@
   --radius-lg: 6px;
 
   /* Shadows */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
-  --shadow-overlay: 0 8px 32px rgba(0, 0, 0, 0.55);
+  --shadow-sm: 0 1px 2px rgba(28, 36, 48, 0.08);
+  --shadow-md: 0 4px 16px rgba(28, 36, 48, 0.1);
+  --shadow-overlay: 0 8px 32px rgba(28, 36, 48, 0.16);
 
   /* Motion */
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -96,5 +96,5 @@
   --z-modal: 60;
   --z-toast: 70;
 
-  color-scheme: dark;
+  color-scheme: light;
 }
