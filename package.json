@@ -15,11 +15,13 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "typecheck": "tsc -b --noEmit",
-    "fixture": "node scripts/generate-fixture.mjs"
+    "fixture": "node scripts/generate-fixture.mjs",
+    "demo-pdf": "node scripts/generate-demo-pdf.mjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-autostart": "^2.5.1",
     "@tauri-apps/plugin-dialog": "^2.7.2",
     "@tauri-apps/plugin-fs": "^2.5.1",
     "@tauri-apps/plugin-process": "^2.3.1",

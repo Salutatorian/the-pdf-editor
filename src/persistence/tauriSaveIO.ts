@@ -42,7 +42,13 @@ async function reopenWithPdfJs(bytes: Uint8Array): Promise<void> {
     }
     await doc.getPage(1);
   } finally {
-    await doc.cleanup();
+    // cleanup() can hang on Windows — never block Save on it
+    void Promise.race([
+      doc.cleanup().catch(() => undefined),
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, 400);
+      }),
+    ]);
   }
 }
 
@@ -52,6 +58,96 @@ export async function reopenVerifyBytes(bytes: Uint8Array): Promise<void> {
     await reopenWithPdfJs(bytes);
   } catch {
     // pdf.js may fail in node/test environments; pdf-lib is enough
+  }
+}
+
+async function uniqueTempPath(besidePath: string): Promise<string> {
+  const { dir, stem } = stemAndDir(besidePath);
+  const token = `${Date.now()}.${Math.random().toString(36).slice(2, 10)}`;
+  return joinPath(dir, `${stem}.pdf_editor.${token}.tmp.pdf`);
+}
+
+/**
+ * Replace destination with temp contents WITHOUT deleting the original first.
+ * Prefer rename via backup so a crash never leaves a truncated PDF.
+ */
+async function replaceWithoutDeletingOriginal(
+  fs: TauriFsModule,
+  originalPath: string,
+  tempPath: string,
+): Promise<void> {
+  const fsAny = fs as TauriFsModule & {
+    rename?: (from: string, to: string) => Promise<void>;
+    remove?: (path: string) => Promise<void>;
+    copyFile?: (from: string, to: string) => Promise<void>;
+    exists?: (path: string) => Promise<boolean>;
+  };
+
+  // 1) Rename swap: original → .bak, temp → original, delete .bak
+  if (typeof fsAny.rename === 'function') {
+    const backupPath = `${originalPath}.pdf_editor.bak`;
+    let movedOriginal = false;
+    try {
+      try {
+        await fsAny.remove?.(backupPath);
+      } catch {
+        // no prior bak
+      }
+      const originalExists =
+        typeof fsAny.exists === 'function'
+          ? await fsAny.exists(originalPath)
+          : true;
+      if (originalExists) {
+        await fsAny.rename(originalPath, backupPath);
+        movedOriginal = true;
+      }
+      await fsAny.rename(tempPath, originalPath);
+      if (movedOriginal) {
+        try {
+          await fsAny.remove?.(backupPath);
+        } catch {
+          // bak left behind is recoverable
+        }
+      }
+      return;
+    } catch (err) {
+      if (movedOriginal) {
+        try {
+          await fsAny.rename(backupPath, originalPath);
+        } catch {
+          // both restore and replace failed — surface original error
+        }
+      }
+      // Fall through to safer overwrite strategies
+      void err;
+    }
+  }
+
+  // 2) Copy-over if available
+  if (typeof fsAny.copyFile === 'function') {
+    try {
+      await fsAny.copyFile(tempPath, originalPath);
+      try {
+        await fsAny.remove?.(tempPath);
+      } catch {
+        // best-effort cleanup
+      }
+      return;
+    } catch {
+      // Fall through
+    }
+  }
+
+  // 3) Last resort: overwrite in place (never delete original first)
+  const bytes = await fs.readFile(tempPath);
+  await fs.writeFile(
+    originalPath,
+    bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
+  );
+  try {
+    await fsAny.remove?.(tempPath);
+  } catch {
+    // best-effort cleanup
   }
 }
 
@@ -78,8 +174,7 @@ export function createBrowserSaveIO(options?: {
 
   return {
     async writeTemp(besidePath, bytes) {
-      const { dir, stem } = stemAndDir(besidePath);
-      const tempPath = joinPath(dir, `${stem}.pdf_editor.tmp.pdf`);
+      const tempPath = await uniqueTempPath(besidePath);
       store.set(tempPath, bytes.slice());
       return tempPath;
     },
@@ -115,8 +210,7 @@ export function createTauriSaveIO(): SaveIO {
   return {
     async writeTemp(besidePath, bytes) {
       const fs = await loadFs();
-      const { dir, stem } = stemAndDir(besidePath);
-      const tempPath = joinPath(dir, `${stem}.pdf_editor.tmp.pdf`);
+      const tempPath = await uniqueTempPath(besidePath);
       await fs.writeFile(tempPath, bytes);
       return tempPath;
     },
@@ -127,31 +221,7 @@ export function createTauriSaveIO(): SaveIO {
     },
     async replaceAtomic(originalPath, tempPath) {
       const fs = await loadFs();
-      // Prefer rename; fall back to copy+remove if rename unavailable
-      const fsAny = fs as TauriFsModule & {
-        rename?: (from: string, to: string) => Promise<void>;
-        remove?: (path: string) => Promise<void>;
-        copyFile?: (from: string, to: string) => Promise<void>;
-      };
-      if (typeof fsAny.rename === 'function') {
-        try {
-          await fsAny.remove?.(originalPath);
-        } catch {
-          // original may not exist on first save-as
-        }
-        await fsAny.rename(tempPath, originalPath);
-        return;
-      }
-      const bytes = await fs.readFile(tempPath);
-      await fs.writeFile(
-        originalPath,
-        bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
-      );
-      try {
-        await fsAny.remove?.(tempPath);
-      } catch {
-        // best-effort cleanup
-      }
+      await replaceWithoutDeletingOriginal(fs, originalPath, tempPath);
     },
     async writeRecovery(originalPath, bytes) {
       const fs = await loadFs();

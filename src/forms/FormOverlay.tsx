@@ -7,11 +7,9 @@ import {
 } from 'react';
 import type {
   FormField,
-  OverlayKind,
   OverlayObject,
   SmartFillSuggestion,
 } from '../document/types.ts';
-import { toolByKind } from '../overlay/tools.ts';
 
 export type FormOverlayProps = {
   pageIndex: number;
@@ -25,15 +23,38 @@ export type FormOverlayProps = {
   onFieldChange: (fieldId: string, value: string) => void;
   onConfirmSuggestion: (id: string) => void;
   onRejectSuggestion: (id: string) => void;
-  onCreateFromSuggestion: (overlay: Omit<OverlayObject, 'id'>) => void;
+  onAcceptAllSuggestions?: () => void;
+  /** @deprecated overlays no longer created from Smart Fill — kept for API compat */
+  onCreateFromSuggestion?: (overlay: Omit<OverlayObject, 'id'>) => void;
   onSignatureField: (field: FormField) => void;
-  /** External focus request (tab navigation) */
   focusedFieldId?: string | null;
   onFocusedFieldChange?: (fieldId: string | null) => void;
 };
 
 function isTruthyCheck(value: string): boolean {
   return value === 'true' || value === 'Yes' || value === '1' || value === 'on';
+}
+
+function fieldHint(field: FormField): string {
+  if (field.placeholder === '') return '';
+  if (field.placeholder) return field.placeholder;
+  if (/^text\d+$/i.test(field.name.replace(/#\d+$/, ''))) return '';
+  const fromName = field.name
+    .replace(/^smartfill:/i, '')
+    .replace(/#\d+$/i, '')
+    .replace(/:[a-f0-9-]+$/i, '')
+    .replace(/[_-]+/g, ' ')
+    .trim();
+  if (
+    fromName &&
+    !/^field/i.test(fromName) &&
+    !/^text\d+$/i.test(fromName)
+  ) {
+    return fromName;
+  }
+  if (field.type === 'date') return 'Date';
+  if (field.type === 'signature') return 'Signature';
+  return '';
 }
 
 export function FormOverlay({
@@ -45,8 +66,8 @@ export function FormOverlay({
   active,
   onFieldChange,
   onConfirmSuggestion,
-  onRejectSuggestion,
-  onCreateFromSuggestion,
+  onRejectSuggestion: _onRejectSuggestion,
+  onAcceptAllSuggestions: _onAcceptAllSuggestions,
   onSignatureField,
   focusedFieldId,
   onFocusedFieldChange,
@@ -59,13 +80,22 @@ export function FormOverlay({
     [fields, pageIndex],
   );
 
-  const pageSuggestions = useMemo(
-    () =>
-      suggestions.filter(
-        (s) => s.pageIndex === pageIndex && !s.confirmed && smartFillEnabled,
-      ),
-    [suggestions, pageIndex, smartFillEnabled],
-  );
+  // Only show suggestion chrome when not already covered by a real field
+  const pageSuggestions = useMemo(() => {
+    if (!smartFillEnabled) return [];
+    return suggestions.filter((s) => {
+      if (s.pageIndex !== pageIndex || s.confirmed) return false;
+      return !pageFields.some(
+        (f) =>
+          !(
+            f.rect.x + f.rect.width < s.rect.x ||
+            s.rect.x + s.rect.width < f.rect.x ||
+            f.rect.y + f.rect.height < s.rect.y ||
+            s.rect.y + s.rect.height < f.rect.y
+          ),
+      );
+    });
+  }, [suggestions, pageIndex, smartFillEnabled, pageFields]);
 
   const inputRefs = useRef(new Map<string, HTMLElement>());
 
@@ -92,36 +122,9 @@ export function FormOverlay({
     [pageFields, onFocusedFieldChange],
   );
 
-  const confirmSuggestion = (suggestion: SmartFillSuggestion) => {
+  const activateSuggestion = (suggestion: SmartFillSuggestion) => {
     onConfirmSuggestion(suggestion.id);
-    const tool = toolByKind(suggestion.kind as OverlayKind);
-    const kind = (tool?.kind ??
-      (suggestion.kind === 'checkbox' ? 'checkmark' : 'text')) as OverlayKind;
-    const defaults = tool ?? {
-      kind,
-      defaultWidth: suggestion.rect.width,
-      defaultHeight: suggestion.rect.height,
-    };
-    onCreateFromSuggestion({
-      pageIndex: suggestion.pageIndex,
-      kind,
-      x: suggestion.rect.x,
-      y: suggestion.rect.y,
-      width: suggestion.rect.width || defaults.defaultWidth,
-      height: suggestion.rect.height || defaults.defaultHeight,
-      rotation: 0,
-      zIndex: 10,
-      text:
-        kind === 'date'
-          ? new Date().toLocaleDateString()
-          : kind === 'checkmark'
-            ? '✓'
-            : kind === 'text'
-              ? ''
-              : undefined,
-      fontSize: 14,
-      color: kind === 'highlight' ? '#ffe566' : '#111111',
-    });
+    onFocusedFieldChange?.(suggestion.id);
   };
 
   if (!active && pageSuggestions.length === 0) {
@@ -134,7 +137,8 @@ export function FormOverlay({
       style={{
         position: 'absolute',
         inset: 0,
-        pointerEvents: active || pageSuggestions.length > 0 ? 'auto' : 'none',
+        // Don't capture the whole page when inactive — Sign / Add tools need clicks
+        pointerEvents: 'none',
       }}
     >
       {active
@@ -142,36 +146,57 @@ export function FormOverlay({
             const style = {
               left: field.rect.x * scale,
               top: field.rect.y * scale,
-              width: Math.max(24, field.rect.width * scale),
-              height: Math.max(18, field.rect.height * scale),
-            } as const;
+              width: Math.max(4, field.rect.width * scale),
+              height: Math.max(4, field.rect.height * scale),
+              fontSize: Math.max(
+                9,
+                Math.min(14, field.rect.height * scale * 0.72),
+              ),
+              pointerEvents: 'auto' as const,
+            };
 
             const setRef = (el: HTMLElement | null) => {
               if (el) inputRefs.current.set(field.id, el);
               else inputRefs.current.delete(field.id);
             };
 
+            const hint = fieldHint(field);
+
             if (field.type === 'checkbox') {
+              // Follow printed box size exactly through zoom — no fixed 14–18 cap
+              const boxW = Math.max(8, field.rect.width * scale);
+              const boxH = Math.max(8, field.rect.height * scale);
+              const checked = isTruthyCheck(field.value);
               return (
-                <label
+                <button
                   key={field.id}
-                  className="form-overlay__field form-overlay__field--checkbox"
-                  style={style}
-                  title={field.name}
+                  ref={setRef as (el: HTMLButtonElement | null) => void}
+                  type="button"
+                  className={
+                    checked
+                      ? 'form-overlay__check form-overlay__check--on'
+                      : 'form-overlay__check'
+                  }
+                  style={{
+                    left: field.rect.x * scale,
+                    top: field.rect.y * scale,
+                    width: boxW,
+                    height: boxH,
+                    fontSize: Math.max(8, Math.min(boxW, boxH) * 0.75),
+                    pointerEvents: 'auto',
+                  }}
+                  title={hint || 'Check'}
+                  aria-label={hint || 'Checkbox'}
+                  aria-pressed={checked}
+                  disabled={field.readOnly}
+                  onClick={() =>
+                    onFieldChange(field.id, checked ? 'false' : 'true')
+                  }
+                  onKeyDown={(e) => handleTab(e, field.id)}
+                  onFocus={() => onFocusedFieldChange?.(field.id)}
                 >
-                  <input
-                    ref={setRef as (el: HTMLInputElement | null) => void}
-                    type="checkbox"
-                    checked={isTruthyCheck(field.value)}
-                    disabled={field.readOnly}
-                    aria-label={field.name}
-                    onChange={(e) =>
-                      onFieldChange(field.id, e.target.checked ? 'true' : 'false')
-                    }
-                    onKeyDown={(e) => handleTab(e, field.id)}
-                    onFocus={() => onFocusedFieldChange?.(field.id)}
-                  />
-                </label>
+                  {checked ? '✓' : ''}
+                </button>
               );
             }
 
@@ -181,7 +206,7 @@ export function FormOverlay({
                   key={field.id}
                   className="form-overlay__field form-overlay__field--radio"
                   style={style}
-                  title={field.name}
+                  title={hint}
                 >
                   <input
                     ref={setRef as (el: HTMLInputElement | null) => void}
@@ -189,7 +214,7 @@ export function FormOverlay({
                     name={field.groupName ?? field.name}
                     checked={Boolean(field.value)}
                     disabled={field.readOnly}
-                    aria-label={field.name}
+                    aria-label={hint}
                     onChange={() =>
                       onFieldChange(field.id, field.options?.[0] ?? 'Yes')
                     }
@@ -209,12 +234,12 @@ export function FormOverlay({
                   style={style}
                   value={field.value}
                   disabled={field.readOnly}
-                  aria-label={field.name}
+                  aria-label={hint}
                   onChange={(e) => onFieldChange(field.id, e.target.value)}
                   onKeyDown={(e) => handleTab(e, field.id)}
                   onFocus={() => onFocusedFieldChange?.(field.id)}
                 >
-                  <option value="">—</option>
+                  <option value="">{hint}</option>
                   {(field.options ?? []).map((opt) => (
                     <option key={opt} value={opt}>
                       {opt}
@@ -225,6 +250,23 @@ export function FormOverlay({
             }
 
             if (field.type === 'signature') {
+              const signed = field.value.startsWith('data:image/');
+              // Ink lives on the Konva overlay (draggable). Don't paint a second
+              // opaque image here or steal pointer events over the date/text.
+              if (signed) {
+                return (
+                  <button
+                    key={field.id}
+                    ref={setRef as (el: HTMLButtonElement | null) => void}
+                    type="button"
+                    className="form-overlay__field form-overlay__field--signature form-overlay__field--signature-ink"
+                    style={{ ...style, pointerEvents: 'none' }}
+                    aria-hidden
+                    tabIndex={-1}
+                    disabled
+                  />
+                );
+              }
               return (
                 <button
                   key={field.id}
@@ -232,13 +274,13 @@ export function FormOverlay({
                   type="button"
                   className="form-overlay__field form-overlay__field--signature"
                   style={style}
-                  aria-label={`Sign ${field.name}`}
+                  aria-label={`Sign ${hint || 'here'}`}
                   disabled={field.readOnly}
                   onClick={() => onSignatureField(field)}
                   onKeyDown={(e) => handleTab(e, field.id)}
                   onFocus={() => onFocusedFieldChange?.(field.id)}
                 >
-                  {field.value ? 'Signed' : 'Click to sign'}
+                  {hint || 'Sign here'}
                 </button>
               );
             }
@@ -253,7 +295,8 @@ export function FormOverlay({
                   style={style}
                   value={field.value}
                   disabled={field.readOnly}
-                  aria-label={field.name}
+                  aria-label={hint}
+                  title={hint}
                   onChange={(e) => onFieldChange(field.id, e.target.value)}
                   onKeyDown={(e) => handleTab(e, field.id)}
                   onFocus={() => onFocusedFieldChange?.(field.id)}
@@ -270,7 +313,8 @@ export function FormOverlay({
                 style={style}
                 value={field.value}
                 disabled={field.readOnly}
-                aria-label={field.name}
+                aria-label={hint}
+                placeholder={hint}
                 onChange={(e) => onFieldChange(field.id, e.target.value)}
                 onKeyDown={(e) => handleTab(e, field.id)}
                 onFocus={() => onFocusedFieldChange?.(field.id)}
@@ -279,55 +323,91 @@ export function FormOverlay({
           })
         : null}
 
-      {pageSuggestions.map((s) => (
-        <div
-          key={s.id}
-          className="form-overlay__suggestion"
-          style={{
-            left: s.rect.x * scale,
-            top: s.rect.y * scale,
-            width: Math.max(80, s.rect.width * scale),
-            height: Math.max(28, s.rect.height * scale),
-          }}
-        >
-          <span className="form-overlay__suggestion-label">
-            {s.label ?? s.kind} ({Math.round(s.confidence * 100)}%)
-          </span>
-          <div className="form-overlay__suggestion-actions">
+      {pageSuggestions.map((s) => {
+        const style = {
+          left: s.rect.x * scale,
+          top: s.rect.y * scale,
+          width: Math.max(80, s.rect.width * scale),
+          height: Math.max(28, s.rect.height * scale),
+          pointerEvents: 'auto' as const,
+        };
+        const hint = (s.label ?? s.kind).replace(/:+\s*$/, '');
+
+        if (s.kind === 'signature') {
+          return (
             <button
+              key={s.id}
               type="button"
-              className="form-overlay__btn form-overlay__btn--confirm"
-              onClick={() => confirmSuggestion(s)}
+              className="form-overlay__field form-overlay__field--signature"
+              style={style}
+              aria-label={`Sign ${hint}`}
+              onClick={() => {
+                activateSuggestion(s);
+                onSignatureField({
+                  id: s.id,
+                  name: `smartfill:${s.label ?? 'signature'}`,
+                  type: 'signature',
+                  pageIndex: s.pageIndex,
+                  rect: { ...s.rect },
+                  value: '',
+                  synthetic: true,
+                  placeholder: hint,
+                });
+              }}
             >
-              Confirm
+              {hint || 'Sign here'}
             </button>
+          );
+        }
+
+        if (s.kind === 'checkbox') {
+          const box = 14 * Math.max(scale, 1);
+          const checked = false;
+          return (
             <button
+              key={s.id}
               type="button"
-              className="form-overlay__btn form-overlay__btn--reject"
-              onClick={() => onRejectSuggestion(s.id)}
+              className="form-overlay__check"
+              style={{
+                left: s.rect.x * scale,
+                top: s.rect.y * scale,
+                width: box,
+                height: box,
+                pointerEvents: 'auto',
+              }}
+              title={hint}
+              aria-label={hint}
+              onClick={() => {
+                activateSuggestion(s);
+                window.setTimeout(() => onFieldChange(s.id, 'true'), 0);
+              }}
             >
-              Reject
+              {checked ? '✓' : ''}
             </button>
+          );
+        }
+
+        return (
+          <div
+            key={s.id}
+            className="form-overlay__suggestion form-overlay__suggestion--live"
+            style={style}
+          >
+            <input
+              className="form-overlay__suggestion-input"
+              type="text"
+              placeholder={hint}
+              aria-label={hint}
+              onFocus={() => activateSuggestion(s)}
+              onChange={(e) => {
+                const value = e.target.value;
+                activateSuggestion(s);
+                onFieldChange(s.id, value);
+              }}
+            />
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
-}
-
-export function nextFormFieldId(
-  fields: FormField[],
-  currentId: string | null,
-  direction: 1 | -1,
-): string | null {
-  const sorted = [...fields].sort(
-    (a, b) =>
-      a.pageIndex - b.pageIndex || a.rect.y - b.rect.y || a.rect.x - b.rect.x,
-  );
-  if (sorted.length === 0) return null;
-  if (!currentId) return sorted[0]?.id ?? null;
-  const idx = sorted.findIndex((f) => f.id === currentId);
-  if (idx < 0) return sorted[0]?.id ?? null;
-  const next = sorted[(idx + direction + sorted.length) % sorted.length];
-  return next?.id ?? null;
 }

@@ -72,6 +72,10 @@ export type FormField = {
   required?: boolean;
   readOnly?: boolean;
   groupName?: string;
+  /** Grey hint shown empty — not saved until the user types */
+  placeholder?: string;
+  /** Smart Fill / non-AcroForm field — value is drawn onto the page on export */
+  synthetic?: boolean;
 };
 
 export type SmartFillSuggestion = {

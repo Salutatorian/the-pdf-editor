@@ -27,9 +27,10 @@ export async function unlockPdf(
   });
 
   // pdf-lib cannot verify the user password. Require a non-empty password when
-  // the source is encrypted so the UI flow still asks for one.
+  // the source is encrypted so the UI flow still asks for one — this is a
+  // best-effort strip, not authentication.
   if (doc.isEncrypted && password.length === 0) {
-    throw new Error('Password required to unlock this PDF');
+    throw new Error('Password required to strip encryption from this PDF');
   }
 
   // Re-saving without encryption produces an unprotected copy when load succeeded.

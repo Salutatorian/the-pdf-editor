@@ -65,28 +65,44 @@ export function PageCanvas({
     let cancelled = false;
     let cancelRender: (() => void) | null = null;
 
+    // Combine PDF page rotate with user rotation (pdf.js rotation replaces page.rotate)
+    const pageRotate = typeof page.rotate === 'number' ? page.rotate : 0;
+    const totalRotation = (((pageRotate + rotation) % 360) + 360) % 360;
+
+    // Size the page shell immediately so fillables/overlays aren't
+    // floating on the dark workspace while pdf.js paints.
+    const viewport = page.getViewport({ scale, rotation: totalRotation });
+    setCssSize({
+      width: Math.floor(viewport.width),
+      height: Math.floor(viewport.height),
+    });
+
     async function render(): Promise<void> {
       try {
-        const handle = renderPageToCanvas(page, canvas!, scale, rotation);
+        const handle = renderPageToCanvas(page, canvas!, scale, totalRotation);
         cancelRender = handle.cancel;
         const size = await handle.promise;
         if (cancelled || gen !== renderGen.current) return;
-        setCssSize(size);
+        setCssSize({
+          width: Math.floor(size.width),
+          height: Math.floor(size.height),
+        });
         onRendered?.(size);
 
-        const viewport = page.getViewport({ scale, rotation });
         const { items, styles } = await getPageTextContent(page);
         if (cancelled || gen !== renderGen.current) return;
 
         const query = searchQuery.trim().toLowerCase();
         const spans: TextSpanLayout[] = [];
+        const vp = page.getViewport({ scale, rotation: totalRotation });
 
         for (let i = 0; i < items.length; i++) {
           const item = items[i]!;
           if (!isTextItem(item)) continue;
-          const tx = pdfjsTransformToCss(item.transform, viewport);
+          const tx = pdfjsTransformToCss(item.transform, vp);
           const style = styles[item.fontName];
-          const fontSize = Math.hypot(item.transform[2] ?? 0, item.transform[3] ?? 0) * scale;
+          const fontSize =
+            Math.hypot(item.transform[2] ?? 0, item.transform[3] ?? 0) * scale;
           const highlight =
             query.length > 0 && item.str.toLowerCase().includes(query);
           spans.push({

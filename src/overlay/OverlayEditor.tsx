@@ -453,6 +453,7 @@ export function OverlayEditor({
       width={stageW}
       height={stageH}
       className="overlay-editor"
+      listening={interactive}
       onClick={handleStageClick}
       onTap={handleStageClick}
       onMouseDown={handleMouseDown}
@@ -470,7 +471,7 @@ export function OverlayEditor({
             <OverlayNode
               overlay={overlay}
               scale={scale}
-              draggable={interactive && !activeTool}
+              draggable={interactive}
               nodeRefs={nodeRefs.current}
               onSelect={(e) => {
                 e.cancelBubble = true;

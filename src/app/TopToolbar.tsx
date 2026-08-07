@@ -31,9 +31,12 @@ import {
   Unlock,
   GitCompare,
   ScanText,
+  Keyboard,
+  Settings,
 } from 'lucide-react';
+import { RecentFilesMenu } from './RecentFilesMenu';
 import { MODES, type AppMode } from './modes';
-import type { OverlayKind } from '../document/types';
+import type { OverlayKind, RecentFileEntry } from '../document/types';
 import { ADD_MODE_TOOLS } from '../overlay/tools';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -75,11 +78,21 @@ export type TopToolbarProps = {
   onSearchSubmit?: () => void;
   onSmartFillChange?: (enabled: boolean) => void;
   onAddToolChange?: (tool: AddTool) => void;
+  /** Open signature pad from the Sign toolbar control */
+  onRequestSignature?: () => void;
   onCompress?: () => void;
   onProtect?: () => void;
   onUnlock?: () => void;
   onCompare?: () => void;
   onOcr?: () => void;
+  onShowShortcuts?: () => void;
+  onOpenSettings?: () => void;
+  /** Apple-style red badge on Settings when an update is available (no number). */
+  updateAvailable?: boolean;
+  recentFiles?: RecentFileEntry[];
+  onOpenRecent?: (path: string, name: string) => void;
+  onRemoveRecent?: (path: string) => void;
+  onClearRecent?: () => void;
 };
 
 const ADD_TOOL_ICONS: Record<
@@ -145,23 +158,30 @@ export function TopToolbar({
   onSearchSubmit,
   onSmartFillChange,
   onAddToolChange,
+  onRequestSignature,
   onCompress,
   onProtect,
   onUnlock,
   onCompare,
   onOcr,
+  onShowShortcuts,
+  onOpenSettings,
+  updateAvailable = false,
+  recentFiles = [],
+  onOpenRecent,
+  onRemoveRecent,
+  onClearRecent,
 }: TopToolbarProps) {
   const onSearchInput = (e: ChangeEvent<HTMLInputElement>) => {
     onSearchChange?.(e.target.value);
   };
 
+  const showAddTools = mode === 'add' || mode === 'sign';
+
   return (
     <TooltipProvider delayDuration={250}>
-      <div
-        className="flex h-11 items-center gap-2 px-2"
-        role="toolbar"
-        aria-label="Main toolbar"
-      >
+      <div className="flex min-w-0 flex-col" role="toolbar" aria-label="Main toolbar">
+      <div className="flex h-11 min-w-0 items-center gap-2 overflow-x-auto px-2">
         <div className="flex items-baseline gap-1 px-2 pr-3">
           <span className="font-sans text-[14px] font-semibold tracking-tight text-foreground">
             pdf<span className="text-primary">_editor</span>
@@ -178,33 +198,40 @@ export function TopToolbar({
 
         <Separator orientation="vertical" className="h-5" />
 
-        <ToggleGroup
-          type="single"
-          value={mode}
-          onValueChange={(v) => {
-            if (v) onModeChange(v as AppMode);
-          }}
-          variant="outline"
-          size="sm"
-          className="hidden gap-0 sm:flex"
+        <div
+          className="relative z-20 flex items-center rounded-md border border-border"
+          role="group"
           aria-label="Application mode"
         >
-          {MODES.filter((m) => m.id !== 'open').map((m) => (
-            <ToggleGroupItem
-              key={m.id}
-              value={m.id}
-              className="h-7 px-2.5 text-[11px]"
-              title={m.description}
-            >
-              {m.label}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
+          {MODES.filter((m) => m.id !== 'open').map((m, i, list) => {
+            const selected = mode === m.id;
+            return (
+              <Button
+                key={m.id}
+                type="button"
+                variant={selected ? 'secondary' : 'ghost'}
+                size="sm"
+                title={m.description}
+                aria-pressed={selected}
+                className={
+                  i === 0
+                    ? 'h-7 rounded-none rounded-l-md px-2.5 text-[11px]'
+                    : i === list.length - 1
+                      ? 'h-7 rounded-none rounded-r-md border-l border-border px-2.5 text-[11px]'
+                      : 'h-7 rounded-none border-l border-border px-2.5 text-[11px]'
+                }
+                onClick={() => onModeChange(m.id)}
+              >
+                {m.label}
+              </Button>
+            );
+          })}
+        </div>
 
         <Separator orientation="vertical" className="h-5" />
 
         <div className="flex items-center gap-0.5">
-          <Tip label="Open" shortcut="Ctrl+O">
+          <Tip label="Open another PDF (replaces current — does not merge)" shortcut="Ctrl+O">
             <Button
               variant="ghost"
               size="icon-sm"
@@ -214,6 +241,14 @@ export function TopToolbar({
               <FileUp />
             </Button>
           </Tip>
+          {onOpenRecent && onRemoveRecent && onClearRecent ? (
+            <RecentFilesMenu
+              files={recentFiles}
+              onOpen={onOpenRecent}
+              onRemove={onRemoveRecent}
+              onClear={onClearRecent}
+            />
+          ) : null}
           <Tip label="Save" shortcut="Ctrl+S">
             <Button
               variant="ghost"
@@ -270,7 +305,7 @@ export function TopToolbar({
         <Separator orientation="vertical" className="h-5" />
 
         <div className="flex items-center gap-0.5">
-          <Tip label="Zoom out">
+          <Tip label="Zoom out" shortcut="Ctrl+-">
             <Button
               variant="ghost"
               size="icon-sm"
@@ -283,7 +318,7 @@ export function TopToolbar({
           <span className="w-10 text-center text-[11px] tabular-nums text-muted-foreground">
             {Math.round(zoomPercent)}%
           </span>
-          <Tip label="Zoom in">
+          <Tip label="Zoom in" shortcut="Ctrl++">
             <Button
               variant="ghost"
               size="icon-sm"
@@ -355,54 +390,6 @@ export function TopToolbar({
                 Smart Fill
               </Button>
             </Tip>
-          </>
-        ) : null}
-
-        {mode === 'add' || mode === 'sign' ? (
-          <>
-            <Separator orientation="vertical" className="h-5" />
-            <ToggleGroup
-              type="single"
-              value={addTool}
-              onValueChange={(v) => {
-                if (v) onAddToolChange?.(v as AddTool);
-              }}
-              variant="outline"
-              size="sm"
-              className="max-w-[min(42vw,28rem)] flex-wrap justify-start"
-            >
-              <ToggleGroupItem value="select" aria-label="Select" className="size-7 p-0">
-                <MousePointer2 className="size-3.5" />
-              </ToggleGroupItem>
-              <ToggleGroupItem value="hand" aria-label="Pan" className="size-7 p-0">
-                <Hand className="size-3.5" />
-              </ToggleGroupItem>
-              {mode === 'add'
-                ? ADD_MODE_TOOLS.map((tool) => {
-                    const Icon = ADD_TOOL_ICONS[tool.kind as keyof typeof ADD_TOOL_ICONS];
-                    return (
-                      <ToggleGroupItem
-                        key={tool.id}
-                        value={tool.kind}
-                        aria-label={tool.label}
-                        title={tool.label}
-                        className="size-7 p-0"
-                      >
-                        {Icon ? <Icon className="size-3.5" /> : tool.label[0]}
-                      </ToggleGroupItem>
-                    );
-                  })
-                : null}
-              {mode === 'sign' ? (
-                <ToggleGroupItem
-                  value="signature"
-                  aria-label="Signature"
-                  className="size-7 p-0"
-                >
-                  <PenLine className="size-3.5" />
-                </ToggleGroupItem>
-              ) : null}
-            </ToggleGroup>
           </>
         ) : null}
 
@@ -487,7 +474,36 @@ export function TopToolbar({
           </>
         ) : null}
 
-        <div className="ml-auto flex items-center gap-0.5">
+        <div className="ml-auto flex shrink-0 items-center gap-0.5">
+          <Tip label="Keyboard shortcuts" shortcut="Ctrl+/">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Keyboard shortcuts"
+              onClick={onShowShortcuts}
+            >
+              <Keyboard />
+            </Button>
+          </Tip>
+          <Tip label="Settings">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={
+                updateAvailable ? 'Settings — update available' : 'Settings'
+              }
+              className="relative"
+              onClick={onOpenSettings}
+            >
+              <Settings />
+              {updateAvailable ? (
+                <span
+                  className="absolute top-1 right-1 size-2 rounded-full bg-destructive ring-2 ring-card"
+                  aria-hidden
+                />
+              ) : null}
+            </Button>
+          </Tip>
           <Tip label="Print" shortcut="Ctrl+P">
             <Button
               variant="ghost"
@@ -499,6 +515,62 @@ export function TopToolbar({
             </Button>
           </Tip>
         </div>
+      </div>
+
+      {showAddTools ? (
+        <div
+          className="flex h-9 min-w-0 items-center gap-2 border-t border-border/70 bg-card/40 px-2"
+          aria-label={mode === 'sign' ? 'Sign tools' : 'Add tools'}
+        >
+          <span className="shrink-0 px-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+            {mode === 'sign' ? 'Sign' : 'Add'}
+          </span>
+          <ToggleGroup
+            type="single"
+            value={addTool}
+            onValueChange={(v) => {
+              if (v) onAddToolChange?.(v as AddTool);
+            }}
+            variant="outline"
+            size="sm"
+            className="min-w-0 flex-1 flex-nowrap justify-start gap-0.5 overflow-x-auto"
+          >
+            <ToggleGroupItem value="select" aria-label="Select" className="size-7 shrink-0 p-0">
+              <MousePointer2 className="size-3.5" />
+            </ToggleGroupItem>
+            <ToggleGroupItem value="hand" aria-label="Pan" className="size-7 shrink-0 p-0">
+              <Hand className="size-3.5" />
+            </ToggleGroupItem>
+            {mode === 'add'
+              ? ADD_MODE_TOOLS.map((tool) => {
+                  const Icon = ADD_TOOL_ICONS[tool.kind as keyof typeof ADD_TOOL_ICONS];
+                  return (
+                    <ToggleGroupItem
+                      key={tool.id}
+                      value={tool.kind}
+                      aria-label={tool.label}
+                      title={tool.label}
+                      className="size-7 shrink-0 p-0"
+                    >
+                      {Icon ? <Icon className="size-3.5" /> : tool.label[0]}
+                    </ToggleGroupItem>
+                  );
+                })
+              : null}
+            {mode === 'sign' ? (
+              <ToggleGroupItem
+                value="signature"
+                aria-label="Signature"
+                className="size-7 shrink-0 p-0"
+                title="Draw signature"
+                onClick={() => onRequestSignature?.()}
+              >
+                <PenLine className="size-3.5" />
+              </ToggleGroupItem>
+            ) : null}
+          </ToggleGroup>
+        </div>
+      ) : null}
       </div>
     </TooltipProvider>
   );

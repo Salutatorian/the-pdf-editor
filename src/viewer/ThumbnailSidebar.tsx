@@ -54,7 +54,9 @@ export function ThumbnailSidebar({
                         src={page.dataUrl}
                         alt=""
                         draggable={false}
+                        decoding="async"
                         className="aspect-[8.5/11] w-full rounded-sm border border-border object-contain bg-white"
+                        style={{ imageRendering: 'auto' }}
                       />
                     ) : (
                       <div className="flex aspect-[8.5/11] w-full items-center justify-center rounded-sm border border-border bg-muted text-muted-foreground">

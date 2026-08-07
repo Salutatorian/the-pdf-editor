@@ -1,4 +1,5 @@
 import type { FormField, OverlayObject } from '../document/types.ts';
+import { cloneData } from '../document/history.ts';
 
 const DRAFT_PREFIX = 'pdf_editor:draft:';
 const INDEX_KEY = 'pdf_editor:draft-index';
@@ -58,8 +59,8 @@ export function saveDraft(args: {
   const payload: DraftPayload = {
     documentKey: args.documentKey,
     documentName: args.documentName,
-    overlays: structuredClone(args.overlays),
-    formFields: structuredClone(args.formFields),
+    overlays: cloneData(args.overlays),
+    formFields: cloneData(args.formFields),
     savedAt: Date.now(),
   };
   localStorage.setItem(draftKey(args.documentKey), JSON.stringify(payload));

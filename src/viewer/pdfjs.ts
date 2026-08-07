@@ -33,18 +33,32 @@ export type PageRenderHandle = {
   cancel: () => void;
 };
 
+/** Absolute viewport rotation: page rotate + user rotate. */
+export function totalPageRotation(
+  page: { rotate?: number },
+  userRotation: number = 0,
+): number {
+  const pageRotate = typeof page.rotate === 'number' ? page.rotate : 0;
+  return (((pageRotate + userRotation) % 360) + 360) % 360;
+}
+
 export function renderPageToCanvas(
   page: PDFPageProxy,
   canvas: HTMLCanvasElement,
   scale: number,
   rotation: number = 0,
 ): PageRenderHandle {
-  const viewport = page.getViewport({ scale, rotation });
+  const viewport = page.getViewport({
+    scale,
+    rotation: totalPageRotation(page, rotation),
+  });
+  const cssWidth = Math.floor(viewport.width);
+  const cssHeight = Math.floor(viewport.height);
   const outputScale = window.devicePixelRatio || 1;
-  canvas.width = Math.floor(viewport.width * outputScale);
-  canvas.height = Math.floor(viewport.height * outputScale);
-  canvas.style.width = `${Math.floor(viewport.width)}px`;
-  canvas.style.height = `${Math.floor(viewport.height)}px`;
+  canvas.width = Math.floor(cssWidth * outputScale);
+  canvas.height = Math.floor(cssHeight * outputScale);
+  canvas.style.width = `${cssWidth}px`;
+  canvas.style.height = `${cssHeight}px`;
 
   const ctx = canvas.getContext('2d');
   if (!ctx) {
@@ -63,8 +77,8 @@ export function renderPageToCanvas(
 
   return {
     promise: task.promise.then(() => ({
-      width: viewport.width,
-      height: viewport.height,
+      width: cssWidth,
+      height: cssHeight,
     })),
     cancel: () => {
       try {

@@ -125,6 +125,24 @@ async function embedImage(
   return pdfDoc.embedPng(bytes);
 }
 
+function baseFieldName(name: string): string {
+  return name.replace(/#\d+$/, '');
+}
+
+/** Map UI fields to AcroForm names (supports `name#0` widget clones). */
+function indexFormFieldsByName(
+  formFields: FormField[],
+): Map<string, FormField> {
+  const map = new Map<string, FormField>();
+  for (const f of formFields) {
+    map.set(f.name, f);
+    const base = baseFieldName(f.name);
+    // Prefer an exact match later; only set base if free
+    if (!map.has(base)) map.set(base, f);
+  }
+  return map;
+}
+
 async function applyFormValues(
   pdfDoc: PDFDocument,
   formFields: FormField[],
@@ -135,21 +153,29 @@ async function applyFormValues(
   } catch {
     return;
   }
-  const fieldsByName = new Map(formFields.map((f) => [f.name, f]));
+  const fieldsByName = indexFormFieldsByName(formFields);
 
   for (const field of form.getFields()) {
     const name = field.getName();
-    const source = fieldsByName.get(name);
+    const source =
+      fieldsByName.get(name) ?? fieldsByName.get(baseFieldName(name));
     if (!source) continue;
 
     const ctor = field.constructor.name;
     try {
       if (ctor === 'PDFTextField') {
         const textField = form.getTextField(name);
+        // Don't dump a PNG data-URL into a text widget
+        if (source.value.startsWith('data:image/')) continue;
         textField.setText(source.value);
       } else if (ctor === 'PDFCheckBox') {
         const checkBox = form.getCheckBox(name);
-        if (source.value === 'true' || source.value === 'Yes' || source.value === '1') {
+        if (
+          source.value === 'true' ||
+          source.value === 'Yes' ||
+          source.value === '1' ||
+          source.value === 'on'
+        ) {
           checkBox.check();
         } else {
           checkBox.uncheck();
@@ -167,6 +193,77 @@ async function applyFormValues(
     } catch {
       // Skip fields that cannot be updated (locked / mismatched type).
     }
+  }
+}
+
+/**
+ * Draw filled values as permanent page ink so ANY PDF viewer (browser,
+ * Preview, etc.) shows the wording — not only apps that read AcroForm.
+ */
+function drawFilledFormFields(
+  pdfDoc: PDFDocument,
+  formFields: FormField[],
+  font: PDFFont,
+  /** When true, only draw Smart Fill fields (AcroForm will be flattened). */
+  syntheticOnly: boolean,
+): void {
+  const pages = pdfDoc.getPages();
+  for (const field of formFields) {
+    if (syntheticOnly && !field.synthetic) continue;
+    const page = pages[field.pageIndex];
+    if (!page) continue;
+    const pageHeight = page.getHeight();
+    const pdfY = toPdfY(pageHeight, field.rect.y, field.rect.height);
+
+    if (field.type === 'checkbox') {
+      const on =
+        field.value === 'true' ||
+        field.value === 'Yes' ||
+        field.value === '1' ||
+        field.value === 'on';
+      if (!on && !field.synthetic) continue;
+      if (field.synthetic) {
+        page.drawRectangle({
+          x: field.rect.x,
+          y: pdfY,
+          width: field.rect.width,
+          height: field.rect.height,
+          borderColor: rgb(0.1, 0.1, 0.1),
+          borderWidth: 1,
+          color: rgb(1, 1, 1),
+        });
+      }
+      if (on) {
+        page.drawText('X', {
+          x: field.rect.x + 2,
+          y: pdfY + 2,
+          size: Math.max(9, field.rect.height - 3),
+          font,
+          color: rgb(0, 0, 0),
+        });
+      }
+      continue;
+    }
+
+    if (field.type === 'signature' && field.value.startsWith('data:image/')) {
+      continue;
+    }
+
+    if (field.value.startsWith('data:image/')) continue;
+
+    const text = field.value?.trim();
+    if (!text) continue;
+    // Helvetica / WinAnsi — drop characters that would throw on save
+    const safe = text.replace(/[^\x09\x0A\x0D\x20-\x7E]/g, '?');
+    const size = Math.min(12, Math.max(8, field.rect.height * 0.65));
+    page.drawText(safe, {
+      x: field.rect.x + 2,
+      y: pdfY + (field.rect.height - size) / 2,
+      size,
+      font,
+      color: rgb(0, 0, 0),
+      maxWidth: field.rect.width - 4,
+    });
   }
 }
 
@@ -300,6 +397,7 @@ function drawOverlay(
 
 /**
  * Build a new PDF by applying AcroForm values and drawing overlays.
+ * Filled wording is baked into page content so browser/OS viewers show it.
  * Overlay coordinates are top-left origin; PDF uses bottom-left.
  */
 export async function buildPdfWithEdits(
@@ -315,11 +413,59 @@ export async function buildPdfWithEdits(
   await applyFormValues(pdfDoc, formFields);
 
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+  // Refresh AcroForm appearance streams so values aren't "invisible" to viewers
+  let flattened = false;
+  try {
+    const form = pdfDoc.getForm();
+    form.updateFieldAppearances(font);
+    // Flatten → values become permanent page ink (survive any PDF viewer)
+    form.flatten();
+    flattened = true;
+  } catch {
+    // Some broken forms refuse flatten — still bake synthetic + draw fallbacks
+  }
+
+  // Smart Fill fields (no AcroForm widget) always need ink drawn
+  // If flatten failed, also bake native field values so wording isn't lost
+  drawFilledFormFields(pdfDoc, formFields, font, flattened);
+
   const pages = pdfDoc.getPages();
   const imageCache = new Map<
     string,
     Awaited<ReturnType<PDFDocument['embedPng']>>
   >();
+
+  // Signature field ink (AcroForm + synthetic) — same pixels as on-screen
+  for (const field of formFields) {
+    if (field.type !== 'signature') continue;
+    if (!field.value.startsWith('data:image/')) continue;
+    if (imageCache.has(field.value)) continue;
+    // Skip if an overlay already carries this exact image (avoid double-draw)
+    const coveredByOverlay = overlays.some(
+      (o) =>
+        o.kind === 'signature' &&
+        o.imageDataUrl === field.value &&
+        o.pageIndex === field.pageIndex,
+    );
+    if (coveredByOverlay) continue;
+    try {
+      const img = await embedImage(pdfDoc, field.value);
+      imageCache.set(field.value, img);
+      const page = pages[field.pageIndex];
+      if (!page) continue;
+      const pageHeight = page.getHeight();
+      const pdfY = toPdfY(pageHeight, field.rect.y, field.rect.height);
+      page.drawImage(img, {
+        x: field.rect.x,
+        y: pdfY,
+        width: field.rect.width,
+        height: field.rect.height,
+      });
+    } catch {
+      // skip
+    }
+  }
 
   for (const overlay of overlays) {
     if (

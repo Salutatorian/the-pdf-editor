@@ -30,11 +30,11 @@ export function PasswordDialog({
   const [password, setPassword] = useState('');
   const [ownerPassword, setOwnerPassword] = useState('');
 
-  const title = mode === 'protect' ? 'Protect PDF' : 'Unlock PDF';
+  const title = mode === 'protect' ? 'Protect PDF' : 'Remove PDF encryption';
   const description =
     mode === 'protect'
-      ? 'Set a user password. Owner password is optional.'
-      : 'Enter the password to unlock this PDF.';
+      ? 'Password protection is not available in this build (pdf-lib cannot encrypt). Use an external tool such as qpdf.'
+      : 'This strips encryption from a copy you can edit. It cannot verify whether the password is correct — only that the file can be opened.';
 
   return (
     <Dialog

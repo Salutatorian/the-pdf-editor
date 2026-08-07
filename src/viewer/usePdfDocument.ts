@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist/types/src/display/api';
+import { getHeldDocumentBytes } from '../document/documentBytesHolder.ts';
 import { loadPdfDocument, renderPageToCanvas } from './pdfjs.ts';
 
 export type UsePdfDocumentResult = {
@@ -11,7 +12,11 @@ export type UsePdfDocumentResult = {
   renderThumbnail: (pageIndex: number, scale?: number) => Promise<string | null>;
 };
 
-export function usePdfDocument(bytes: Uint8Array | null): UsePdfDocumentResult {
+/**
+ * @param documentGen - bumps on every open/replace so we reload even when
+ *   byteLength is unchanged (critical for Recent → reopen).
+ */
+export function usePdfDocument(documentGen: number): UsePdfDocumentResult {
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [pageCount, setPageCount] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -22,24 +27,27 @@ export function usePdfDocument(bytes: Uint8Array | null): UsePdfDocumentResult {
   useEffect(() => {
     let cancelled = false;
     const previous = docRef.current;
+    const bytes = getHeldDocumentBytes();
 
     async function load(): Promise<void> {
       thumbCache.current.clear();
       if (previous) {
-        try {
-          await previous.cleanup();
-        } catch {
-          // ignore cleanup errors
-        }
         docRef.current = null;
+        // Don't await forever — cleanup can hang and freeze Open on Windows
+        void Promise.race([
+          previous.cleanup().catch(() => undefined),
+          new Promise<void>((resolve) => {
+            window.setTimeout(resolve, 400);
+          }),
+        ]);
       }
 
-      if (!bytes) {
+      if (!bytes || bytes.byteLength < 5) {
         if (!cancelled) {
           setDoc(null);
           setPageCount(0);
           setLoading(false);
-          setError(null);
+          setError(bytes ? 'PDF file is empty or unreadable' : null);
         }
         return;
       }
@@ -49,7 +57,7 @@ export function usePdfDocument(bytes: Uint8Array | null): UsePdfDocumentResult {
       try {
         const loaded = await loadPdfDocument(bytes);
         if (cancelled) {
-          await loaded.cleanup();
+          void loaded.cleanup().catch(() => undefined);
           return;
         }
         docRef.current = loaded;
@@ -71,7 +79,7 @@ export function usePdfDocument(bytes: Uint8Array | null): UsePdfDocumentResult {
     return () => {
       cancelled = true;
     };
-  }, [bytes]);
+  }, [documentGen]);
 
   useEffect(() => {
     return () => {
@@ -94,14 +102,15 @@ export function usePdfDocument(bytes: Uint8Array | null): UsePdfDocumentResult {
   );
 
   const renderThumbnail = useCallback(
-    async (pageIndex: number, scale = 0.2): Promise<string | null> => {
+    async (pageIndex: number, scale = 0.85): Promise<string | null> => {
       const cached = thumbCache.current.get(pageIndex);
       if (cached) return cached;
       const page = await getPage(pageIndex);
       if (!page) return null;
+      // Target ~2× sidebar width so CSS upscaling doesn't blur
       const canvas = document.createElement('canvas');
       await renderPageToCanvas(page, canvas, scale, 0).promise;
-      const dataUrl = canvas.toDataURL('image/png');
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
       thumbCache.current.set(pageIndex, dataUrl);
       return dataUrl;
     },

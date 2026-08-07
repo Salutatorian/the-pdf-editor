@@ -91,4 +91,20 @@ describe('history helpers', () => {
     expect(afterRedo.overlays[0]!.text).toBe('v2');
     expect(afterRedo.formFields[0]!.value).toBe('2');
   });
+
+  it('clones signature overlays with large data URLs without throwing', () => {
+    const dataUrl = `data:image/png;base64,${'A'.repeat(2000)}`;
+    const overlays = [
+      overlay({
+        id: 'sig',
+        kind: 'signature',
+        imageDataUrl: dataUrl,
+        text: undefined,
+      }),
+    ];
+    const snap = createSnapshot(overlays, []);
+    expect(snap.overlays[0]!.imageDataUrl).toBe(dataUrl);
+    const restored = applySnapshot(snap, []);
+    expect(restored.overlays[0]!.imageDataUrl).toBe(dataUrl);
+  });
 });

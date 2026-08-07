@@ -1,102 +1,112 @@
 # pdf_editor
 
-Desktop-first PDF application for viewing, filling, annotating, signing, and **reliably saving** PDFs.
+**A better Stirling PDF — fully offline desktop PDF editing.** Your files never leave your computer. No accounts, no cloud upload, no “processing on our servers.” Everything runs locally.
 
-pdf_editor is an original product. Related open-source tools were used only as feature inspiration—not as UI or architecture clones:
+Inspired by tools like [Stirling-PDF](https://github.com/Stirling-Tools/Stirling-PDF) for *what* a PDF toolkit should cover — built as an original desktop app focused on **fill → sign → save reliably**, not a hosted web service.
 
-- [Stirling-PDF](https://github.com/Stirling-Tools/Stirling-PDF)
-- [pdf.js](https://mozilla.github.io/pdf.js/)
-- [OCRmyPDF](https://ocrmypdf.readthedocs.io/)
-- [DocuSeal](https://www.docuseal.com/)
-- [Xournal++](https://xournalpp.github.io/)
-- [OpenSign](https://www.opensignlabs.com/)
-- [PDF Arranger](https://github.com/pdfarranger/pdfarranger)
-- [qpdf](https://qpdf.sourceforge.io/)
-- [pdfme](https://pdfme.com/)
-- [PDF4QT](https://jakubmelka.github.io/)
+<p align="center">
+  <img src="docs/screenshots/01-fill-demo.png" alt="pdf_editor Fill mode with demo intake form" width="900" />
+</p>
+
+<p align="center">
+  <a href="https://github.com/Salutatorian/the-pdf-editor/releases/latest"><img alt="Download" src="https://img.shields.io/github/v/release/Salutatorian/the-pdf-editor?label=Download&color=0ea5e9" /></a>
+  <img alt="Platforms" src="https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-native-111827" />
+  <img alt="Offline" src="https://img.shields.io/badge/Privacy-100%25%20offline-22c55e" />
+  <img alt="License" src="https://img.shields.io/badge/License-MIT-blue" />
+</p>
+
+## Why pdf_editor?
+
+| | Stirling PDF (typical) | **pdf_editor** |
+|---|---|---|
+| Where it runs | Often a **server / browser** you host or visit | **Native desktop** (Windows · macOS · Linux) |
+| Your PDFs | Can pass through a service | **Stay on your disk only** |
+| Forms & signing | Tooling-oriented | First-class **Fill · Sign · Smart Fill** |
+| Saving | Export / download | **Verified save** — never says “Saved” until the file reopens cleanly |
+
+**Privacy promise:** no telemetry cloud, no document upload, no remote storage. Autosave and drafts write next to *your* files on *your* machine.
+
+## Download
+
+Installers are built for all three platforms on every release:
+
+| Platform | Artifact |
+|---|---|
+| **Windows** | `.exe` installer (NSIS) |
+| **macOS** | `.dmg` / `.app` |
+| **Linux** | `.AppImage` / `.deb` |
+
+→ **[Latest release](https://github.com/Salutatorian/the-pdf-editor/releases/latest)**
+
+> Builds publish automatically via GitHub Actions when a version tag (e.g. `v0.1.0`) is pushed. If assets are still processing, check the [Actions](https://github.com/Salutatorian/the-pdf-editor/actions) tab.
+
+## Screenshots
+
+### 1. Fill forms (hero)
+Open a PDF, jump into **Fill**, type into real AcroForm fields. Smart Fill can detect extra blanks — confirm before they stick.
+
+![Fill mode](docs/screenshots/01-fill-demo.png)
+
+### 2. Signatures (ink only, reusable)
+Draw, type, or import. Transparent ink — no white box. Save signatures locally and reuse them.
+
+![Create signature](docs/screenshots/02-signature.png)
+
+### 3. Organize pages
+Reorder, rotate, duplicate, delete, extract, merge — without leaving the app.
+
+![Organize pages](docs/screenshots/03-organize.png)
+
+### 4. Add Text tools
+Text, image, checkmark, date, initials, highlight, draw, shapes, redact.
+
+![Add tools](docs/screenshots/04-add-tools.png)
+
+### Demo PDF for your own shots
+[`docs/demo-form.pdf`](docs/demo-form.pdf) — or regenerate:
+
+```bash
+node scripts/generate-demo-pdf.mjs
+```
+
+## Features
+
+- **Open** — local files, drag-and-drop, recent files
+- **View** — continuous scroll, thumbnails, zoom, fit width/page, rotate, search, print
+- **Fill** — AcroForm fields, Tab navigation, Smart Fill suggestions
+- **Add Text** — annotations with select / move / resize / undo
+- **Sign** — draw · type · import · saved library (device-only)
+- **Organize** — reorder, rotate, duplicate, delete, extract, merge
+- **Save / Save As** — verified pipeline (temp → verify → replace)
+- **Extras** — compress, compare, OCR assist, protect/unlock helpers
+
+### Verified save
+
+1. Write beside the original as a temp PDF  
+2. Check non-empty + `%PDF` + structure  
+3. Reopen successfully  
+4. Only then replace the original  
+5. On failure: original preserved + recovery copy + clear error  
+
+Visual signatures are **appearance** signatures — not certificate/PKI digital signatures.
 
 ## Stack
 
-- **TypeScript / React frontend (~80–90%)** — UI, viewer, overlays, forms, signatures
-- **Tauri / Rust** — desktop shell, filesystem access, verified save
-- **Vite** — bundling
-- **Tailwind CSS + shadcn/ui** — theming and primitives (dark charcoal aesthetic)
-- **ReUI Frame-inspired panels** — layout inspired by [ReUI Frame / card application blocks](https://reui.io/blocks/application/card) (inspiration, not a clone)
-- **PDF.js** — render, scroll, thumbnails, search, text layer
-- **pdf-lib** — forms, edits, export
-- **React Konva** — draggable overlay editor
-- **Signature Pad** — handwritten signatures
-
-## First release focus
-
-| Mode | Capability |
-|------|------------|
-| **Open** | Local PDFs, drag-and-drop, recent files |
-| **View** | Smooth scroll, thumbnails, zoom, fit width/page, rotate, search, text selection, print |
-| **Fill** | Existing AcroForm fields + optional Smart Fill suggestions (confirm before create) |
-| **Add** | Text, image, checkmark, date, initials, highlight, draw, shapes |
-| **Sign** | Draw, type, or import transparent PNG; reusable local library; initials |
-| **Save / Save As** | Verified export pipeline (see below) |
-
-Later releases: merge, split, organize, OCR, redaction, compression, conversion, passwords, comparison.
-
-## Verified save (most important)
-
-Clicking **Save** never reports success until verification finishes:
-
-1. Export edits to a **temporary file beside the original** (`*.pdf_editor.tmp.pdf`)
-2. Confirm the result is **non-empty** and starts with `%PDF`
-3. Confirm PDF structure (including `%%EOF`)
-4. **Reopen** the temp file successfully (pdf-lib / PDF.js)
-5. Only then **replace** the original
-6. Show a confirmation with **filename, location, size, and timestamp**
-
-On failure: the original is preserved, a recovery copy may be written (`*.pdf_editor.recovery.pdf`), the exact error is shown, and **Save As** is offered.
-
-Also: `Ctrl+S`, dirty indicators, autosaved recovery drafts, unsaved-change warnings.
-
-### Visual vs digital signatures
-
-Placing a drawn/typed/imported signature adds a **visual** signature image on the page. That is **not** a certificate-based digital signature (PKCS#7 / DocMDP). Certificate signing is out of scope for v1.
-
-## Architecture
-
-```
-src/
-  app/           Shell, toolbar, modes, shortcuts, error boundary
-  viewer/        PDF.js rendering, navigation, search, thumbnails
-  document/      Model, zustand store, undo/redo history
-  forms/         AcroForm loader, form overlay, Smart Fill
-  overlay/       Konva editor, tools, alignment guides
-  signatures/    Signature engine + pad dialog
-  ocr/           Optional OCR stub (disabled in v1)
-  organizer/     Page organizer stub (later)
-  export/        buildPdfWithEdits + verifiedSave pipeline
-  persistence/   File IO, recent files, drafts, SaveIO adapters
-  components/ui/ shadcn/ui primitives (button, dialog, tabs, …)
-  components/    Frame panels and shared UI building blocks
-```
+React · TypeScript · Vite · Tauri 2 · PDF.js · pdf-lib · Konva · Signature Pad
 
 ## Develop
 
-Requirements: Node 20+, Rust (for Tauri), [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
+Needs Node 20+, Rust, and [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```bash
 npm install
-npm run fixture          # sample PDF for tests
-npm run dev              # web UI only
-npm run tauri:dev        # full desktop app
-npm test                 # unit tests
-npm run test:e2e         # Playwright (open + render)
-npm run typecheck
-npm run build
+npm run fixture          # tiny test PDF
+npm run tauri:dev        # desktop app
+npm test
+npm run tauri:build      # local installer for your OS
 ```
 
-## Tests
-
-- Unit: PDF verification, save pipeline (never “saved” before verify), history, Smart Fill `confirmed: false`
-- E2E: open fixture PDF and render pages
-- Pipeline: export with overlays, reopen, `verifiedSave` with browser SaveIO
+Cross-platform installers are produced in CI (see `.github/workflows/release.yml`).
 
 ## License
 

@@ -1,13 +1,22 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "pdf_editor main window capabilities",
+  "description": "pdf_editor main window capabilities (Windows, macOS, Linux)",
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:window:allow-minimize",
+    "core:window:allow-close",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:window:allow-hide",
+    "core:window:allow-is-minimized",
+    "core:window:allow-is-visible",
     "dialog:default",
     "shell:allow-open",
-    "process:default",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled",
     "fs:default",
     "fs:allow-read-file",
     "fs:allow-write-file",
@@ -19,8 +28,12 @@
     {
       "identifier": "fs:scope",
       "allow": [
-        { "path": "**" },
-        { "path": "**/*" }
+        { "path": "$HOME/**" },
+        { "path": "$DOCUMENT/**" },
+        { "path": "$DOWNLOAD/**" },
+        { "path": "$DESKTOP/**" },
+        { "path": "$TEMP/**" },
+        { "path": "$APPLOCALDATA/**" }
       ]
     }
   ]

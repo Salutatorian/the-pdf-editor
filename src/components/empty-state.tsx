@@ -2,19 +2,20 @@ import {
   FileUp,
   PenLine,
   FormInput,
-  Clock3,
   type LucideIcon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Frame, FramePanel } from '@/components/frame';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import type { RecentFileEntry } from '@/document/types';
+import { RecentFilesMenu } from '@/app/RecentFilesMenu';
 
 export type EmptyStateProps = {
   recentFiles: RecentFileEntry[];
   onOpen: () => void;
   onOpenRecent: (path: string, name: string) => void;
+  onRemoveRecent: (path: string) => void;
+  onClearRecent: () => void;
   onFileInput: (file: File) => void;
 };
 
@@ -46,6 +47,8 @@ export function EmptyState({
   recentFiles,
   onOpen,
   onOpenRecent,
+  onRemoveRecent,
+  onClearRecent,
   onFileInput,
 }: EmptyStateProps) {
   return (
@@ -69,7 +72,6 @@ export function EmptyState({
           </div>
         </div>
 
-        {/* ReUI-inspired action cards — interaction surfaces, not KPI tiles */}
         <div className="@container grid gap-3 sm:grid-cols-3">
           {ACTIONS.map((item) => {
             const Icon = item.icon;
@@ -99,36 +101,13 @@ export function EmptyState({
           })}
         </div>
 
-        {recentFiles.length > 0 ? (
-          <Frame>
-            <FramePanel>
-              <div className="flex items-center gap-2 border-b border-border/70 px-4 py-3">
-                <Clock3 className="size-3.5 text-muted-foreground" />
-                <span className="text-sm font-medium">Recent files</span>
-              </div>
-              <ScrollArea className="max-h-48">
-                <ul className="divide-y divide-border/60 p-1">
-                  {recentFiles.map((f) => (
-                    <li key={f.path}>
-                      <button
-                        type="button"
-                        className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent"
-                        onClick={() => onOpenRecent(f.path, f.name)}
-                      >
-                        <span className="min-w-0 flex-1 truncate font-medium">
-                          {f.name}
-                        </span>
-                        <span className="max-w-[40%] truncate text-[11px] text-muted-foreground">
-                          {f.path}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </ScrollArea>
-            </FramePanel>
-          </Frame>
-        ) : null}
+        <RecentFilesMenu
+          variant="panel"
+          files={recentFiles}
+          onOpen={onOpenRecent}
+          onRemove={onRemoveRecent}
+          onClear={onClearRecent}
+        />
 
         <input
           data-testid="file-input"

@@ -15,7 +15,25 @@ import {
 } from './app/TopToolbar.tsx';
 import type { AppMode } from './app/modes.ts';
 import { useKeyboardShortcuts } from './app/shortcuts.ts';
+import { ShortcutsHelpDialog } from './app/ShortcutsHelpDialog.tsx';
+import { SettingsDialog } from './settings/SettingsDialog.tsx';
+import { UpdateToast } from './settings/UpdateToast.tsx';
+import { WhatsNewDialog } from './settings/WhatsNewDialog.tsx';
+import { APP_VERSION } from './settings/appVersion.ts';
+import {
+  loadAppSettings,
+  patchAppSettings,
+} from './settings/appSettings.ts';
+import {
+  checkForAppUpdate,
+  openUpdateDownload,
+  type UpdateInfo,
+} from './settings/updateService.ts';
+import { setOpenAtLoginEnabled } from './settings/autostart.ts';
+import { restoreUiAfterNativeDialog } from './settings/windowActions.ts';
 import { useDocumentStore } from './document/documentStore.ts';
+import { withSaveLock } from './persistence/saveLock.ts';
+import { assertSafePdfBytes } from './persistence/pdfSafety.ts';
 import type {
   DocumentMeta,
   FormField,
@@ -24,9 +42,12 @@ import type {
 } from './document/types.ts';
 import { canRedo, canUndo } from './document/history.ts';
 import { loadAcroFormFields } from './forms/AcroFormLoader.ts';
-import { FormOverlay, nextFormFieldId } from './forms/FormOverlay.tsx';
+import { syncFormFieldRectsFromPdfJs } from './forms/syncFormFieldRectsFromPdfJs.ts';
+import { FormOverlay } from './forms/FormOverlay.tsx';
+import { nextFormFieldId } from './forms/formNav.ts';
 import {
   detectSmartFillSuggestions,
+  filterSuggestionsAgainstFields,
   type TextItemHint,
 } from './forms/SmartFill.ts';
 import {
@@ -73,7 +94,9 @@ import {
 import { createSaveIO } from './persistence/tauriSaveIO.ts';
 import {
   addRecentFile,
+  clearRecentFiles,
   listRecentFiles,
+  removeRecentFile,
 } from './persistence/recentFiles.ts';
 import { clearDraft, saveDraft } from './persistence/drafts.ts';
 import { protectPdf, unlockPdf } from './security/PdfSecurity.ts';
@@ -84,6 +107,7 @@ import {
 import {
   cleanupSignaturePng,
   saveSignature,
+  toTransparentSignatureInk,
 } from './signatures/SignatureEngine.ts';
 import {
   SignaturePadDialog,
@@ -107,7 +131,10 @@ import {
 import { getPageTextContent } from './viewer/pdfjs.ts';
 import './styles/viewer.css';
 
-const AUTOSAVE_MS = 30_000;
+/** Crash backup to localStorage — every edit, not a long interval. */
+const DRAFT_SAVE_MS = 250;
+/** Write the real PDF on disk after typing pauses (Tauri only). */
+const LIVE_DISK_SAVE_MS = 500;
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -130,6 +157,7 @@ function AppInner() {
   const store = useDocumentStore();
   const {
     documentBytes,
+    documentGen,
     meta,
     mode,
     currentPage,
@@ -179,18 +207,150 @@ function AppInner() {
     error: string | null;
   }>({ open: false, mode: 'unlock', error: null });
   const [ocrOpen, setOcrOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [showUpdateToast, setShowUpdateToast] = useState(false);
+  const [whatsNewVersion, setWhatsNewVersion] = useState<string | null>(null);
   const [compareResult, setCompareResult] = useState<CompareResultView | null>(
     null,
   );
   const searchCursor = useRef<(typeof searchMatches)[0] | null>(null);
   const saveIo = useMemo(() => createSaveIO(), []);
+  const liveSaveInFlight = useRef(false);
+  const liveSavePending = useRef(false);
+  /** Bumps on every Open so in-flight autosave / Smart Fill can't touch the new doc. */
+  const docSessionRef = useRef(0);
+  const openingRef = useRef(false);
+  /** Path we already auto-activated fillables for (avoids re-running on every render). */
+  const autoFillPathRef = useRef<string | null>(null);
 
-  const { doc, getPage, renderThumbnail, loading, error: pdfError } =
-    usePdfDocument(documentBytes);
+  const {
+    doc,
+    pageCount: pdfjsPageCount,
+    getPage,
+    renderThumbnail,
+    loading,
+    error: pdfError,
+  } = usePdfDocument(documentGen);
+
+  const viewerPageCount = pdfjsPageCount > 0 ? pdfjsPageCount : pageCount;
+  const syncedRectsForGen = useRef<number | null>(null);
+
+  /** Lock fillable positions to pdf.js annotation geometry (survives zoom). */
+  useEffect(() => {
+    if (!doc || !documentGen) return;
+    if (syncedRectsForGen.current === documentGen) return;
+    const fields = useDocumentStore.getState().formFields;
+    if (fields.length === 0) {
+      // Don't mark synced — fields may arrive with the same gen shortly after
+      return;
+    }
+    const session = docSessionRef.current;
+    const snapshotIds = new Set(fields.map((f) => f.id));
+    let cancelled = false;
+    void (async () => {
+      try {
+        const synced = await syncFormFieldRectsFromPdfJs(doc, fields);
+        if (cancelled || docSessionRef.current !== session) return;
+        const live = useDocumentStore.getState().formFields;
+        // Merge: keep live values / newly added fields; only take rects from sync
+        const byId = new Map(synced.map((f) => [f.id, f]));
+        const merged = live.map((f) => {
+          const s = byId.get(f.id);
+          if (!s) return f;
+          return { ...f, rect: s.rect, pageIndex: s.pageIndex };
+        });
+        // Include synced fields that were in the snapshot but somehow dropped
+        for (const s of synced) {
+          if (!merged.some((f) => f.id === s.id) && snapshotIds.has(s.id)) {
+            const liveMatch = live.find((f) => f.id === s.id);
+            merged.push(liveMatch ? { ...s, value: liveMatch.value } : s);
+          }
+        }
+        syncedRectsForGen.current = documentGen;
+        store.setFormFields(merged);
+        if (useDocumentStore.getState().mode === 'fill') {
+          store.setStatus(
+            `Ready to fill · ${merged.length} field(s) — aligned to page`,
+          );
+        }
+      } catch (err) {
+        console.error('Field rect sync failed', err);
+        if (docSessionRef.current === session) {
+          syncedRectsForGen.current = documentGen;
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [doc, documentGen, formFields.length, store]);
+
+  const hasDiskPath = Boolean(
+    meta?.path &&
+      (meta.path.includes('/') || meta.path.includes('\\')) &&
+      isTauri(),
+  );
 
   useEffect(() => {
     store.setRecentFiles(listRecentFiles());
   }, []);
+
+  /** Detect upgrades → What's New once; sync launch-at-login (default off). */
+  useEffect(() => {
+    const prefs = loadAppSettings();
+    const previous = prefs.lastLaunchedVersion;
+    const shouldShowWhatsNew =
+      Boolean(previous) &&
+      previous !== APP_VERSION &&
+      prefs.lastSeenChangelogVersion !== APP_VERSION;
+
+    if (shouldShowWhatsNew) {
+      setWhatsNewVersion(APP_VERSION);
+    }
+
+    patchAppSettings({ lastLaunchedVersion: APP_VERSION });
+
+    // Never enable on first run — only apply when the user turned it on
+    if (prefs.openAtLogin) {
+      void setOpenAtLoginEnabled(true);
+    } else {
+      void setOpenAtLoginEnabled(false);
+    }
+
+    let cancelled = false;
+    void (async () => {
+      const info = await checkForAppUpdate();
+      if (cancelled || !info) return;
+      setUpdateInfo(info);
+      if (prefs.dismissedUpdateVersion !== info.version) {
+        setShowUpdateToast(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const dismissWhatsNew = useCallback(() => {
+    patchAppSettings({ lastSeenChangelogVersion: APP_VERSION });
+    setWhatsNewVersion(null);
+  }, []);
+
+  const onUpdateToastCancel = useCallback(() => {
+    if (updateInfo) {
+      patchAppSettings({ dismissedUpdateVersion: updateInfo.version });
+    }
+    setShowUpdateToast(false);
+  }, [updateInfo]);
+
+  const onUpdateToastConfirm = useCallback(() => {
+    if (!updateInfo) return;
+    void openUpdateDownload(updateInfo);
+    setShowUpdateToast(false);
+  }, [updateInfo]);
 
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -202,32 +362,152 @@ function AppInner() {
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [dirty]);
 
+  /** Instant local draft backup on every edit (survives crash even if disk save lags). */
   useEffect(() => {
     if (!meta || !dirty) return;
-    const id = window.setInterval(() => {
+    const id = window.setTimeout(() => {
       saveDraft({
         documentKey: meta.path,
         documentName: meta.fileName,
         overlays: useDocumentStore.getState().overlays,
         formFields: useDocumentStore.getState().formFields,
       });
-      store.setStatus('Draft autosaved');
-    }, AUTOSAVE_MS);
-    return () => window.clearInterval(id);
-  }, [meta, dirty]);
+    }, DRAFT_SAVE_MS);
+    return () => window.clearTimeout(id);
+  }, [meta, dirty, overlays, formFields]);
+
+  /**
+   * Live disk save: every keystroke (debounced) writes the real PDF file.
+   * No confirmation modal — silent status only. Tauri + real path required.
+   */
+  useEffect(() => {
+    if (!hasDiskPath || !documentBytes || !meta || !dirty) return;
+
+    const sessionAtSchedule = docSessionRef.current;
+    const pathAtSchedule = meta.path;
+
+    const id = window.setTimeout(() => {
+      void (async () => {
+        if (liveSaveInFlight.current) {
+          liveSavePending.current = true;
+          return;
+        }
+        liveSaveInFlight.current = true;
+        try {
+          do {
+            liveSavePending.current = false;
+            // User opened a different PDF — abandon this save loop
+            if (docSessionRef.current !== sessionAtSchedule) break;
+
+            const state = useDocumentStore.getState();
+            if (!state.meta || !state.documentBytes || !state.dirty) break;
+            // Never write the previous file's edits onto a newly opened path
+            if (state.meta.path !== pathAtSchedule) break;
+
+            const savedOverlays = state.overlays;
+            const savedFields = state.formFields;
+            const savePath = state.meta.path;
+            const saveBytes = state.documentBytes;
+
+            store.setSaveStatus('saving');
+            store.setStatus('Saving as you type…');
+            const result = await withSaveLock(() =>
+              verifiedSave({
+                originalPath: savePath,
+                originalBytes: saveBytes,
+                overlays: savedOverlays,
+                formFields: savedFields,
+                io: saveIo,
+              }),
+            );
+
+            if (docSessionRef.current !== sessionAtSchedule) break;
+            const now = useDocumentStore.getState();
+            if (now.meta?.path !== savePath) break;
+
+            if (result.success) {
+              const drifted =
+                JSON.stringify(now.formFields) !==
+                  JSON.stringify(savedFields) ||
+                JSON.stringify(now.overlays) !== JSON.stringify(savedOverlays);
+              if (drifted) {
+                store.setSaveStatus('idle');
+                store.setDirty(true);
+                liveSavePending.current = true;
+                store.setStatus('Saving as you type…');
+              } else {
+                store.setSaveStatus('saved');
+                store.setStatus(
+                  `Written into the PDF file · reopen in Chrome/Edge/Preview to see your wording · ${new Date().toLocaleTimeString()}`,
+                );
+                clearDraft(savePath);
+              }
+            } else {
+              store.setSaveStatus('error', result.error);
+              store.setStatus(
+                `Autosave failed — draft kept. ${result.error ?? ''}`.trim(),
+              );
+              store.setDirty(true);
+            }
+          } while (
+            liveSavePending.current &&
+            docSessionRef.current === sessionAtSchedule
+          );
+        } catch (err) {
+          if (docSessionRef.current === sessionAtSchedule) {
+            const message = err instanceof Error ? err.message : String(err);
+            store.setSaveStatus('error', message);
+            store.setStatus(`Autosave failed — draft kept. ${message}`);
+            store.setDirty(true);
+          }
+        } finally {
+          liveSaveInFlight.current = false;
+        }
+      })();
+    }, LIVE_DISK_SAVE_MS);
+
+    return () => window.clearTimeout(id);
+  }, [
+    hasDiskPath,
+    documentBytes,
+    meta,
+    dirty,
+    overlays,
+    formFields,
+    saveIo,
+    store,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
     async function loadThumbs(): Promise<void> {
-      if (!doc || pageCount === 0) {
+      if (!doc || viewerPageCount === 0) {
         setThumbs([]);
         return;
       }
+      // Show placeholders immediately so sidebar isn't "No pages" while rendering
+      setThumbs(
+        Array.from({ length: viewerPageCount }, (_, pageIndex) => ({
+          pageIndex,
+          dataUrl: null,
+        })),
+      );
       const items: ThumbnailItem[] = [];
-      for (let i = 0; i < pageCount; i++) {
+      for (let i = 0; i < viewerPageCount; i++) {
         const dataUrl = await renderThumbnail(i);
         if (cancelled) return;
         items.push({ pageIndex: i, dataUrl });
+        setThumbs([
+          ...items,
+          ...Array.from(
+            { length: viewerPageCount - items.length },
+            (_, j) => ({ pageIndex: items.length + j, dataUrl: null }),
+          ),
+        ]);
+        // Yield so Open / mode clicks stay responsive on long docs
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
       }
       if (!cancelled) setThumbs(items);
     }
@@ -235,11 +515,22 @@ function AppInner() {
     return () => {
       cancelled = true;
     };
-  }, [doc, pageCount, renderThumbnail]);
+  }, [doc, viewerPageCount, renderThumbnail]);
 
   const openBytes = useCallback(
     async (bytes: Uint8Array, path: string, name: string) => {
+      // New document session — cancel in-flight autosave / Smart Fill targeting the old file
+      docSessionRef.current += 1;
+      const session = docSessionRef.current;
+      liveSavePending.current = false;
+      syncedRectsForGen.current = null;
+      autoFillPathRef.current = null;
+
+      store.setStatus(`Opening ${name}…`);
+      assertSafePdfBytes(bytes, name);
       const fields = await loadAcroFormFields(bytes);
+      if (docSessionRef.current !== session) return;
+
       const metaDoc: DocumentMeta = {
         path,
         fileName: name,
@@ -247,58 +538,168 @@ function AppInner() {
         fileSize: bytes.byteLength,
         lastModified: Date.now(),
       };
-      // pageCount filled via pdf-lib
       const pdf = await PDFDocument.load(bytes, {
         ignoreEncryption: true,
         updateMetadata: false,
       });
+      if (docSessionRef.current !== session) return;
+
       metaDoc.pageCount = pdf.getPageCount();
       store.setDocument(bytes, metaDoc, fields);
-      const recent = addRecentFile({ path, name });
-      store.setRecentFiles(recent);
+      // Only remember absolute disk paths (drag/drop browser names can't reopen)
+      if (path.includes('/') || path.includes('\\')) {
+        const recent = addRecentFile({ path, name });
+        store.setRecentFiles(recent);
+      }
       setAddTool('select');
       setFocusedFieldId(null);
+      setOrganizeSelected([]);
+      setCompareResult(null);
+      setSigOpen(false);
+      setShortcutsOpen(false);
+      setSettingsOpen(false);
+      setOcrOpen(false);
+      setPasswordDialog({ open: false, mode: 'unlock', error: null });
+      // setDocument already enters fill — avoid re-forcing mode later
+      store.setStatus(
+        fields.length > 0
+          ? `Opened ${name} · ${fields.length} form field(s)`
+          : `Opened ${name}`,
+      );
+      await restoreUiAfterNativeDialog();
     },
     [store],
   );
 
   const handleOpen = useCallback(async () => {
-    if (dirty && !window.confirm('Discard unsaved changes?')) return;
-    const opened = await openPdfDialog();
-    if (!opened) return;
-    await openBytes(opened.bytes, opened.path, opened.name);
-  }, [dirty, openBytes]);
+    if (openingRef.current) return;
+    const current = useDocumentStore.getState();
+    if (current.dirty) {
+      const ok = window.confirm(
+        'Switch to another PDF?\n\nThis replaces the document on screen — it does not merge or overwrite the file you pick.\nEdits to the current file may still be autosaving.',
+      );
+      if (!ok) {
+        await restoreUiAfterNativeDialog();
+        return;
+      }
+    }
+
+    openingRef.current = true;
+    // Let the confirm dialog fully dismiss before the native file picker (avoids Windows freeze)
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 60);
+    });
+
+    store.setStatus('Choose a PDF to open…');
+    try {
+      const opened = await openPdfDialog();
+      await restoreUiAfterNativeDialog();
+      if (!opened) {
+        store.setStatus(current.meta ? `Ready · ${current.meta.fileName}` : 'Ready');
+        return;
+      }
+      await openBytes(opened.bytes, opened.path, opened.name);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      store.setStatus(`Could not open PDF: ${message}`);
+      await restoreUiAfterNativeDialog();
+    } finally {
+      openingRef.current = false;
+    }
+  }, [openBytes, store]);
 
   const handleDropFiles = useCallback(
     async (files: File[]) => {
       const file = files[0];
       if (!file) return;
-      if (dirty && !window.confirm('Discard unsaved changes?')) return;
-      const bytes = await fileToBytes(file);
-      await openBytes(bytes, file.name, file.name);
+      if (openingRef.current) return;
+      const current = useDocumentStore.getState();
+      if (current.dirty) {
+        const ok = window.confirm(
+          'Switch to this PDF?\n\nThis replaces the document on screen — it does not merge files.',
+        );
+        if (!ok) {
+          await restoreUiAfterNativeDialog();
+          return;
+        }
+      }
+      openingRef.current = true;
+      try {
+        store.setStatus(`Opening ${file.name}…`);
+        const bytes = await fileToBytes(file);
+        await openBytes(bytes, file.name, file.name);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        store.setStatus(`Could not open PDF: ${message}`);
+      } finally {
+        openingRef.current = false;
+        await restoreUiAfterNativeDialog();
+      }
     },
-    [dirty, openBytes],
+    [openBytes, store],
   );
 
   const handleOpenRecent = useCallback(
     async (path: string, name: string) => {
-      if (dirty && !window.confirm('Discard unsaved changes?')) return;
-      try {
-        if (isTauri()) {
-          const bytes = await readPdfFromPath(path);
-          await openBytes(bytes, path, name);
-        } else {
-          store.setStatus('Re-open recent files from disk in the desktop app');
-          await handleOpen();
-        }
-      } catch (err) {
-        store.setStatus(
-          err instanceof Error ? err.message : 'Failed to open recent file',
+      if (openingRef.current) return;
+      const current = useDocumentStore.getState();
+      if (current.dirty) {
+        const ok = window.confirm(
+          'Switch to this PDF?\n\nThis replaces the document on screen — it does not merge files.',
         );
+        if (!ok) {
+          await restoreUiAfterNativeDialog();
+          return;
+        }
+      }
+      openingRef.current = true;
+      store.setStatus(`Opening ${name}…`);
+      try {
+        if (!isTauri()) {
+          store.setStatus('Recent files need the desktop app — use Open');
+          openingRef.current = false;
+          await handleOpen();
+          return;
+        }
+        const bytes = await readPdfFromPath(path);
+        if (!bytes || bytes.byteLength < 8) {
+          throw new Error('File is empty or missing — remove it from Recent');
+        }
+        await openBytes(bytes, path, name);
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : 'Failed to open recent file';
+        const scopeHint =
+          /scope|not allowed|forbidden|denied|os error|access/i.test(message)
+            ? ' — file may be outside allowed folders; use Open'
+            : '';
+        store.setStatus(`${message}${scopeHint}`);
+        if (
+          /not found|no such file|empty|missing|access|scope|not allowed|forbidden|denied/i.test(
+            message,
+          )
+        ) {
+          store.setRecentFiles(removeRecentFile(path));
+        }
+      } finally {
+        openingRef.current = false;
+        await restoreUiAfterNativeDialog();
       }
     },
-    [dirty, openBytes, handleOpen, store],
+    [openBytes, handleOpen, store],
   );
+
+  const handleRemoveRecent = useCallback(
+    (path: string) => {
+      store.setRecentFiles(removeRecentFile(path));
+    },
+    [store],
+  );
+
+  const handleClearRecent = useCallback(() => {
+    clearRecentFiles();
+    store.setRecentFiles([]);
+  }, [store]);
 
   const applySaveResult = useCallback(
     (result: SaveResult, asSaveAs: boolean) => {
@@ -334,53 +735,29 @@ function AppInner() {
     [store, meta],
   );
 
-  const handleSave = useCallback(async () => {
-    if (!documentBytes || !meta) return;
-    store.setSaveStatus('saving');
-    store.setStatus('Saving…');
-    try {
-      store.setSaveStatus('verifying');
-      store.setStatus('Verifying…');
-      const result = await verifiedSave({
-        originalPath: meta.path,
-        originalBytes: documentBytes,
-        overlays,
-        formFields,
-        io: saveIo,
-      });
-      applySaveResult(result, false);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      store.setSaveStatus('error', message);
-      store.setStatus(`Save failed: ${message}`);
-      store.setDirty(true);
-    }
-  }, [
-    documentBytes,
-    meta,
-    overlays,
-    formFields,
-    saveIo,
-    store,
-    applySaveResult,
-  ]);
-
   const handleSaveAsFixed = useCallback(async () => {
     if (!documentBytes || !meta) return;
-    const target = await pickSavePath(meta.fileName);
+    let target: string | null = null;
+    try {
+      target = await pickSavePath(meta.fileName);
+    } finally {
+      await restoreUiAfterNativeDialog();
+    }
     if (!target) return;
     store.setSaveStatus('saving');
     store.setStatus('Saving As…');
     try {
       store.setSaveStatus('verifying');
       store.setStatus('Verifying…');
-      const result = await saveAs({
-        targetPath: target,
-        originalBytes: documentBytes,
-        overlays,
-        formFields,
-        io: saveIo,
-      });
+      const result = await withSaveLock(() =>
+        saveAs({
+          targetPath: target,
+          originalBytes: documentBytes,
+          overlays,
+          formFields,
+          io: saveIo,
+        }),
+      );
       applySaveResult(result, true);
       if (result.success) {
         const fileName =
@@ -416,6 +793,46 @@ function AppInner() {
     applySaveResult,
   ]);
 
+  const handleSave = useCallback(async () => {
+    if (!documentBytes || !meta) return;
+    // Drag/drop or browser open has no real disk path — force Save As
+    if (!hasDiskPath) {
+      await handleSaveAsFixed();
+      return;
+    }
+    store.setSaveStatus('saving');
+    store.setStatus('Saving…');
+    try {
+      store.setSaveStatus('verifying');
+      store.setStatus('Verifying…');
+      const result = await withSaveLock(() =>
+        verifiedSave({
+          originalPath: meta.path,
+          originalBytes: documentBytes,
+          overlays,
+          formFields,
+          io: saveIo,
+        }),
+      );
+      applySaveResult(result, false);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      store.setSaveStatus('error', message);
+      store.setStatus(`Save failed: ${message}`);
+      store.setDirty(true);
+    }
+  }, [
+    documentBytes,
+    meta,
+    hasDiskPath,
+    overlays,
+    formFields,
+    saveIo,
+    store,
+    applySaveResult,
+    handleSaveAsFixed,
+  ]);
+
   const handlePrint = useCallback(() => {
     window.print();
   }, []);
@@ -437,8 +854,10 @@ function AppInner() {
 
   const runSmartFill = useCallback(async () => {
     if (!doc) return;
+    const session = docSessionRef.current;
     const all = [];
     for (let i = 0; i < doc.numPages; i++) {
+      if (docSessionRef.current !== session) return;
       const page = await getPage(i);
       if (!page) continue;
       const viewport = page.getViewport({ scale: 1 });
@@ -461,16 +880,101 @@ function AppInner() {
           hints,
         ),
       );
+      // Yield so Open / UI stay responsive on multi-page PDFs
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 0);
+      });
     }
-    store.setSmartFillSuggestions(all);
-    store.setStatus(`Smart Fill: ${all.length} suggestion(s)`);
+    if (docSessionRef.current !== session) return;
+    const existing = useDocumentStore.getState().formFields;
+    const filtered = filterSuggestionsAgainstFields(all, existing);
+    store.setSmartFillSuggestions(filtered);
+    return filtered;
   }, [doc, getPage, store]);
+
+  /** On open: detect fillables in the background. Never steal mode after the user switches. */
+  useEffect(() => {
+    if (!doc || !meta || !smartFillOn) return;
+    if (autoFillPathRef.current === meta.path) return;
+
+    const session = docSessionRef.current;
+    const path = meta.path;
+    let cancelled = false;
+    void (async () => {
+      // Let the first paint + toolbar clicks land before scanning text
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 250);
+      });
+      if (cancelled || docSessionRef.current !== session) return;
+
+      const existingCount = useDocumentStore.getState().formFields.length;
+      const suggestions = await runSmartFill();
+      if (cancelled || docSessionRef.current !== session) return;
+      autoFillPathRef.current = path;
+      if (!suggestions) return;
+
+      // Only auto-apply while still in Fill — never yank the user out of View/Add/Sign/Organize
+      if (useDocumentStore.getState().mode !== 'fill') {
+        store.setSmartFillSuggestions(suggestions);
+        return;
+      }
+
+      if (existingCount > 0) {
+        const gaps = suggestions.filter((s) => s.kind === 'checkbox');
+        store.setSmartFillSuggestions(gaps);
+        const n = store.acceptAllSmartFill();
+        const total = useDocumentStore.getState().formFields.length;
+        if (useDocumentStore.getState().mode === 'fill') {
+          store.setStatus(
+            n > 0
+              ? `Ready to fill · ${total} field(s) (+${n} checkbox${n === 1 ? '' : 'es'})`
+              : `Ready to fill · ${total} form field(s)`,
+          );
+        }
+        return;
+      }
+
+      // Cap auto-accept so huge scans don't freeze the toolbar
+      const MAX_AUTO = 80;
+      if (suggestions.length > MAX_AUTO) {
+        store.setSmartFillSuggestions(suggestions.slice(0, MAX_AUTO));
+        store.acceptAllSmartFill();
+        store.setSmartFillSuggestions(suggestions.slice(MAX_AUTO));
+        if (useDocumentStore.getState().mode === 'fill') {
+          store.setStatus(
+            `Ready to fill · ${MAX_AUTO}+ fields detected — confirm more with Smart Fill`,
+          );
+        }
+        return;
+      }
+
+      const n = store.acceptAllSmartFill();
+      const total = useDocumentStore.getState().formFields.length;
+      if (useDocumentStore.getState().mode === 'fill') {
+        store.setStatus(
+          total > 0
+            ? `Ready to fill · ${total} field(s)${n > 0 ? ` (+${n} detected)` : ''} — type away`
+            : 'No fillable fields detected — try Add tools',
+        );
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [doc, meta, smartFillOn, runSmartFill, store]);
 
   const onSmartFillChange = useCallback(
     (enabled: boolean) => {
       setSmartFillOn(enabled);
       if (enabled) {
-        void runSmartFill();
+        autoFillPathRef.current = null;
+        const session = docSessionRef.current;
+        void (async () => {
+          const suggestions = await runSmartFill();
+          if (docSessionRef.current !== session) return;
+          if (suggestions) store.acceptAllSmartFill();
+        })();
       } else {
         store.setSmartFillSuggestions([]);
       }
@@ -493,39 +997,38 @@ function AppInner() {
       nextFields: FormField[],
       status: string,
     ) => {
-      void PDFDocument.load(newBytes, {
-        ignoreEncryption: true,
-        updateMetadata: false,
-      }).then((pdf) => {
-        const nextPageCount = pdf.getPageCount();
-        useDocumentStore.setState((s) => {
-          if (!s.meta) return;
-          s.documentBytes = newBytes;
-          s.meta = {
-            ...s.meta,
-            pageCount: nextPageCount,
-            fileSize: newBytes.byteLength,
-            lastModified: Date.now(),
-          };
-          s.pageCount = nextPageCount;
-          s.overlays = nextOverlays;
-          s.formFields = nextFields;
-          s.dirty = true;
-          s.currentPage = Math.min(
-            s.currentPage,
-            Math.max(0, nextPageCount - 1),
+      void (async () => {
+        try {
+          const pdf = await PDFDocument.load(newBytes, {
+            ignoreEncryption: true,
+            updateMetadata: false,
+          });
+          const nextPageCount = pdf.getPageCount();
+          store.replaceDocumentBytes(newBytes, nextPageCount);
+          useDocumentStore.setState((s) => {
+            if (!s.meta) return;
+            s.overlays = nextOverlays;
+            s.formFields = nextFields;
+            s.currentPage = Math.min(
+              s.currentPage,
+              Math.max(0, nextPageCount - 1),
+            );
+            s.selectedIds = [];
+            s.smartFillSuggestions = [];
+            s.undoStack = [];
+            s.redoStack = [];
+            s.statusMessage = status;
+            s.mode = 'organize';
+          });
+          setOrganizeSelected([]);
+        } catch (err) {
+          store.setStatus(
+            err instanceof Error ? err.message : 'Organize failed',
           );
-          s.selectedIds = [];
-          s.smartFillSuggestions = [];
-          s.undoStack = [];
-          s.redoStack = [];
-          s.statusMessage = status;
-          s.mode = 'organize';
-        });
-        setOrganizeSelected([]);
-      });
+        }
+      })();
     },
-    [],
+    [store],
   );
 
   const onModeChange = useCallback(
@@ -534,16 +1037,21 @@ function AppInner() {
         void handleOpen();
         return;
       }
+      // Mode switch must stay instant — never block on Smart Fill / scans
       store.setMode(next);
       if (next === 'add') setAddTool('text');
-      if (next === 'sign') setAddTool('signature');
-      if (next === 'view' || next === 'organize') setAddTool('select');
-      if (next === 'fill' && smartFillOn) {
-        void runSmartFill();
+      if (next === 'sign') {
+        // Enter Sign mode with select so existing signatures stay draggable.
+        // Opening the pad is explicit via the Sign tool button.
+        setAddTool('select');
+      }
+      if (next === 'view' || next === 'organize' || next === 'fill') {
+        setAddTool('select');
       }
       if (next === 'organize') setOrganizeSelected([]);
+      void restoreUiAfterNativeDialog();
     },
-    [handleOpen, store, smartFillOn, runSmartFill],
+    [handleOpen, store],
   );
 
   const handleOrganizeReorder = useCallback(
@@ -627,11 +1135,16 @@ function AppInner() {
       if (!documentBytes || !meta) return;
       try {
         const extracted = await extractPages(documentBytes, indexes);
-        const target = await pickSavePath(
-          meta.fileName.replace(/\.pdf$/i, '') + '-extract.pdf',
-        );
+        let target: string | null = null;
+        try {
+          target = await pickSavePath(
+            meta.fileName.replace(/\.pdf$/i, '') + '-extract.pdf',
+          );
+        } finally {
+          await restoreUiAfterNativeDialog();
+        }
         if (!target) return;
-        await saveBytes(target, extracted);
+        await withSaveLock(() => saveBytes(target, extracted));
         store.setStatus(`Extracted ${indexes.length} page(s) → ${target}`);
       } catch (err) {
         store.setStatus(err instanceof Error ? err.message : String(err));
@@ -642,7 +1155,12 @@ function AppInner() {
 
   const handleOrganizeMerge = useCallback(async () => {
     if (!documentBytes) return;
-    const opened = await openPdfDialog();
+    let opened: Awaited<ReturnType<typeof openPdfDialog>> = null;
+    try {
+      opened = await openPdfDialog();
+    } finally {
+      await restoreUiAfterNativeDialog();
+    }
     if (!opened) return;
     try {
       const next = await mergePdfs([documentBytes, opened.bytes]);
@@ -661,17 +1179,10 @@ function AppInner() {
     if (!documentBytes) return;
     try {
       const result = await compressPdf(documentBytes);
-      useDocumentStore.setState((s) => {
-        if (!s.meta) return;
-        s.documentBytes = result.bytes;
-        s.meta = {
-          ...s.meta,
-          fileSize: result.after,
-          lastModified: Date.now(),
-        };
-        s.dirty = true;
-        s.statusMessage = `Compressed ${formatBytes(result.before)} → ${formatBytes(result.after)}`;
-      });
+      store.replaceDocumentBytes(result.bytes);
+      store.setStatus(
+        `Compressed ${formatBytes(result.before)} → ${formatBytes(result.after)}`,
+      );
     } catch (err) {
       store.setStatus(err instanceof Error ? err.message : String(err));
     }
@@ -679,7 +1190,12 @@ function AppInner() {
 
   const handleCompare = useCallback(async () => {
     if (!documentBytes) return;
-    const opened = await openPdfDialog();
+    let opened: Awaited<ReturnType<typeof openPdfDialog>> = null;
+    try {
+      opened = await openPdfDialog();
+    } finally {
+      await restoreUiAfterNativeDialog();
+    }
     if (!opened) return;
     try {
       const [pageCounts, hashes] = await Promise.all([
@@ -702,35 +1218,25 @@ function AppInner() {
       if (!documentBytes) return;
       try {
         if (passwordDialog.mode === 'unlock') {
+          const ok = window.confirm(
+            'Remove encryption from this PDF?\n\nThis creates an unprotected working copy. The password is not verified by this app.',
+          );
+          if (!ok) {
+            await restoreUiAfterNativeDialog();
+            return;
+          }
+          await restoreUiAfterNativeDialog();
           const next = await unlockPdf(documentBytes, password);
-          useDocumentStore.setState((s) => {
-            if (!s.meta) return;
-            s.documentBytes = next;
-            s.meta = {
-              ...s.meta,
-              fileSize: next.byteLength,
-              lastModified: Date.now(),
-            };
-            s.dirty = true;
-            s.statusMessage = 'PDF unlocked (encryption stripped if present)';
-          });
+          store.replaceDocumentBytes(next);
+          store.setStatus('Encryption stripped (unprotected copy — Save to keep)');
         } else {
           const next = await protectPdf(
             documentBytes,
             password,
             ownerPassword,
           );
-          useDocumentStore.setState((s) => {
-            if (!s.meta) return;
-            s.documentBytes = next;
-            s.meta = {
-              ...s.meta,
-              fileSize: next.byteLength,
-              lastModified: Date.now(),
-            };
-            s.dirty = true;
-            s.statusMessage = 'PDF protected';
-          });
+          store.replaceDocumentBytes(next);
+          store.setStatus('PDF protected');
         }
         setPasswordDialog({ open: false, mode: 'unlock', error: null });
       } catch (err) {
@@ -740,7 +1246,7 @@ function AppInner() {
         }));
       }
     },
-    [documentBytes, passwordDialog.mode],
+    [documentBytes, passwordDialog.mode, store],
   );
 
   const handleOcrSuggestions = useCallback(
@@ -751,16 +1257,15 @@ function AppInner() {
         width: item.width,
         height: item.height,
       }));
-      const suggestions = detectSmartFillSuggestions(
-        pageWidth,
-        pageHeight,
-        currentPage,
-        hints,
+      const suggestions = filterSuggestionsAgainstFields(
+        detectSmartFillSuggestions(pageWidth, pageHeight, currentPage, hints),
+        useDocumentStore.getState().formFields,
       );
       store.setSmartFillSuggestions(suggestions);
       store.setMode('fill');
+      const n = store.acceptAllSmartFill();
       store.setStatus(
-        `OCR → Smart Fill: ${suggestions.length} suggestion(s) (PDF unchanged)`,
+        `OCR → Fill: ${n} field(s) ready (PDF unchanged until you type/save)`,
       );
     },
     [currentPage, store],
@@ -776,8 +1281,12 @@ function AppInner() {
 
   const onSignatureSaved = useCallback(
     async (result: SignaturePadResult) => {
+      const place = pendingSig;
       let dataUrl = result.dataUrl;
-      if (result.cleanup) {
+      // Always strip white so ink doesn't cover text behind the signature
+      if (result.cleanup !== false) {
+        dataUrl = await toTransparentSignatureInk(dataUrl);
+      } else {
         try {
           dataUrl = await cleanupSignaturePng(dataUrl);
         } catch {
@@ -787,7 +1296,7 @@ function AppInner() {
       let signatureId: string | undefined;
       if (result.saveToLibrary) {
         const saved = saveSignature({
-          name: result.name ?? 'Signature',
+          name: result.name?.trim() || 'My signature',
           source:
             result.source === 'draw'
               ? 'drawn'
@@ -798,29 +1307,53 @@ function AppInner() {
         });
         signatureId = saved.id;
       }
-      const place = pendingSig;
       setSigOpen(false);
       setPendingSig(null);
       if (!place) return;
 
+      const field = place.fieldId
+        ? useDocumentStore.getState().formFields.find((f) => f.id === place.fieldId)
+        : undefined;
+
       if (place.fieldId) {
         store.setFormValue(place.fieldId, dataUrl);
       }
+
+      const width = Math.max(80, field?.rect.width ?? 200);
+      const height = Math.max(28, field?.rect.height ?? 60);
+      const x = field?.rect.x ?? place.x;
+      const y = field?.rect.y ?? place.y;
+
       store.addOverlay({
         pageIndex: place.pageIndex,
         kind: 'signature',
-        x: place.x,
-        y: place.y,
-        width: 200,
-        height: 60,
+        x,
+        y,
+        width,
+        height,
         rotation: 0,
-        zIndex: overlays.length + 1,
+        zIndex: useDocumentStore.getState().overlays.length + 1,
         imageDataUrl: dataUrl,
         signatureId,
+        color: '#000000',
       });
+      // Select tool so the signature can be dragged immediately
+      setAddTool('select');
+      store.setMode('sign');
+      store.setStatus('Signature applied — drag to move, corners to resize');
     },
-    [pendingSig, store, overlays.length],
+    [pendingSig, store],
   );
+
+  const openSignFromToolbar = useCallback(() => {
+    store.setMode('sign');
+    setAddTool('signature');
+    openSignatureAt({
+      pageIndex: currentPage,
+      x: 72,
+      y: 520,
+    });
+  }, [store, openSignatureAt, currentPage]);
 
   const selectedOverlay = useMemo(
     () => overlays.find((o) => o.id === selectedIds[0]) ?? null,
@@ -893,7 +1426,7 @@ function AppInner() {
       print: handlePrint,
       search: () => {
         const input = document.querySelector<HTMLInputElement>(
-          '.toolbar__search',
+          '.toolbar__search, input[aria-label="Search"]',
         );
         input?.focus();
         input?.select();
@@ -902,6 +1435,10 @@ function AppInner() {
       redo: () => store.redo(),
       delete: () => store.deleteOverlays(selectedIds),
       duplicate: () => store.duplicateOverlays(selectedIds),
+      selectAll: () => {
+        const ids = useDocumentStore.getState().overlays.map((o) => o.id);
+        store.select(ids);
+      },
       clearSelection: () => store.clearSelection(),
       nudgeLeft: (e) => {
         const d = nudgeDelta('ArrowLeft', e.shiftKey);
@@ -931,8 +1468,41 @@ function AppInner() {
           if (o) store.updateOverlay(id, { x: o.x + d.dx, y: o.y + d.dy });
         }
       },
+      zoomIn: () => store.setZoom(zoom * 1.15),
+      zoomOut: () => store.setZoom(zoom / 1.15),
+      zoomReset: () => store.setZoom(1),
+      zoom100: () => store.setZoom(1),
+      zoom200: () => store.setZoom(2),
+      zoom50: () => store.setZoom(0.5),
       zoomFitPage: () => store.setZoomMode('fit-page'),
       zoomFitWidth: () => store.setZoomMode('fit-width'),
+      pagePrev: () => {
+        const next = Math.max(0, currentPage - 1);
+        store.setPage(next);
+        jumpViewerToPage(next);
+      },
+      pageNext: () => {
+        const last = Math.max(0, viewerPageCount - 1);
+        const next = Math.min(last, currentPage + 1);
+        store.setPage(next);
+        jumpViewerToPage(next);
+      },
+      pageFirst: () => {
+        store.setPage(0);
+        jumpViewerToPage(0);
+      },
+      pageLast: () => {
+        const last = Math.max(0, viewerPageCount - 1);
+        store.setPage(last);
+        jumpViewerToPage(last);
+      },
+      modeView: () => onModeChange('view'),
+      modeFill: () => onModeChange('fill'),
+      modeAdd: () => onModeChange('add'),
+      modeSign: () => onModeChange('sign'),
+      modeOrganize: () => onModeChange('organize'),
+      toggleSidebar: () => store.toggleSidebar(),
+      showShortcuts: () => setShortcutsOpen(true),
       formTab: () => {
         const next = nextFormFieldId(formFields, focusedFieldId, 1);
         setFocusedFieldId(next);
@@ -972,7 +1542,7 @@ function AppInner() {
     saveStatus === 'error' && saveError
       ? saveError
       : pdfError
-        ? pdfError
+        ? `PDF view failed: ${pdfError}`
         : loading
           ? 'Loading PDF…'
           : statusMessage || 'Ready';
@@ -1006,6 +1576,7 @@ function AppInner() {
       onSearchSubmit={() => void handleSearchSubmit()}
       onSmartFillChange={onSmartFillChange}
       onAddToolChange={setAddTool}
+      onRequestSignature={openSignFromToolbar}
       onCompress={() => void handleCompress()}
       onProtect={() =>
         setPasswordDialog({ open: true, mode: 'protect', error: null })
@@ -1015,6 +1586,13 @@ function AppInner() {
       }
       onCompare={() => void handleCompare()}
       onOcr={() => setOcrOpen(true)}
+      onShowShortcuts={() => setShortcutsOpen(true)}
+      onOpenSettings={() => setSettingsOpen(true)}
+      updateAvailable={Boolean(updateInfo)}
+      recentFiles={recentFiles}
+      onOpenRecent={(path, name) => void handleOpenRecent(path, name)}
+      onRemoveRecent={handleRemoveRecent}
+      onClearRecent={handleClearRecent}
     />
   );
 
@@ -1045,7 +1623,9 @@ function AppInner() {
         statusMessage={statusText}
         statusTone={statusTone}
         pageLabel={
-          emptyState ? undefined : `Page ${currentPage + 1} / ${pageCount}`
+          emptyState
+            ? undefined
+            : `Page ${currentPage + 1} / ${viewerPageCount || pageCount}`
         }
         zoomLabel={emptyState ? undefined : `${Math.round(zoom * 100)}%`}
         statusMeta={
@@ -1064,11 +1644,13 @@ function AppInner() {
             recentFiles={recentFiles}
             onOpen={() => void handleOpen()}
             onOpenRecent={(path, name) => void handleOpenRecent(path, name)}
+            onRemoveRecent={handleRemoveRecent}
+            onClearRecent={handleClearRecent}
             onFileInput={(file) => void handleDropFiles([file])}
           />
         ) : mode === 'organize' ? (
           <OrganizePanel
-            pageCount={pageCount}
+            pageCount={viewerPageCount}
             currentPage={currentPage}
             thumbnails={thumbs}
             selectedPages={organizeSelected}
@@ -1087,17 +1669,18 @@ function AppInner() {
         ) : (
           <PdfViewer
             doc={doc}
-            pageCount={pageCount}
+            pageCount={viewerPageCount}
             currentPage={currentPage}
             onPageChange={(p) => store.setPage(p)}
             zoom={zoom}
             zoomMode={zoomMode}
-            onZoomChange={(z) => {
-              if (zoomMode === 'custom') store.setZoom(z);
-              else {
+            onZoomChange={(z, source) => {
+              if (source === 'fit') {
                 useDocumentStore.setState((s) => {
-                  s.zoom = z;
+                  s.zoom = Math.min(5, Math.max(0.1, z));
                 });
+              } else {
+                store.setZoom(z);
               }
             }}
             rotation={rotation}
@@ -1139,7 +1722,14 @@ function AppInner() {
                   onFieldChange={(id, value) => store.setFormValue(id, value)}
                   onConfirmSuggestion={(id) => store.confirmSmartFill(id)}
                   onRejectSuggestion={(id) => store.rejectSmartFill(id)}
-                  onCreateFromSuggestion={(o) => store.addOverlay(o)}
+                  onAcceptAllSuggestions={() => {
+                    const n = store.acceptAllSmartFill();
+                    if (n > 0 && !hasDiskPath) {
+                      store.setStatus(
+                        'Fields ready — use Save / Save As so typing writes to a real file',
+                      );
+                    }
+                  }}
                   onSignatureField={(field) =>
                     openSignatureAt({
                       pageIndex: field.pageIndex,
@@ -1172,6 +1762,39 @@ function AppInner() {
         onConfirm={() => setSaveConfirm((s) => ({ ...s, open: false }))}
         onCancel={() => setSaveConfirm((s) => ({ ...s, open: false }))}
       />
+
+      <ShortcutsHelpDialog
+        open={shortcutsOpen}
+        onOpenChange={setShortcutsOpen}
+      />
+
+      <SettingsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        updateAvailable={updateInfo}
+        onUpdateAvailable={(info) => {
+          setUpdateInfo(info);
+          if (info) setShowUpdateToast(true);
+        }}
+        onShowWhatsNew={(version) => {
+          setSettingsOpen(false);
+          setWhatsNewVersion(version);
+        }}
+      />
+
+      <WhatsNewDialog
+        open={Boolean(whatsNewVersion)}
+        version={whatsNewVersion ?? APP_VERSION}
+        onContinue={dismissWhatsNew}
+      />
+
+      {showUpdateToast && updateInfo ? (
+        <UpdateToast
+          update={updateInfo}
+          onUpdate={onUpdateToastConfirm}
+          onCancel={onUpdateToastCancel}
+        />
+      ) : null}
 
       <PasswordDialog
         open={passwordDialog.open}

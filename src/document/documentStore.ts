@@ -6,6 +6,7 @@ import {
   applySnapshot,
   canRedo,
   canUndo,
+  cloneData,
   createSnapshot,
 } from './history.ts';
 import type {
@@ -21,11 +22,23 @@ import type {
   SmartFillSuggestion,
   ZoomMode,
 } from './types.ts';
+import {
+  dedupeFormFields,
+  filterSuggestionsAgainstFields,
+  fieldsClash,
+  suggestionToFormField,
+} from '../forms/SmartFill.ts';
+import {
+  getHeldDocumentBytes,
+  setHeldDocumentBytes,
+} from './documentBytesHolder.ts';
 
 const MAX_HISTORY = 50;
 
 export type DocumentState = {
   documentBytes: Uint8Array | null;
+  /** Bumps on every open so pdf.js reloads even if length matches. */
+  documentGen: number;
   meta: DocumentMeta | null;
   mode: AppMode;
   currentPage: number;
@@ -55,6 +68,8 @@ export type DocumentState = {
     meta: DocumentMeta,
     formFields?: FormField[],
   ) => void;
+  /** Replace PDF bytes in-place (organize/compress/unlock) without wiping edits. */
+  replaceDocumentBytes: (bytes: Uint8Array, pageCount?: number) => void;
   clearDocument: () => void;
   setMode: (mode: AppMode) => void;
   setPage: (page: number) => void;
@@ -75,6 +90,8 @@ export type DocumentState = {
   setSmartFillSuggestions: (suggestions: SmartFillSuggestion[]) => void;
   confirmSmartFill: (id: string) => void;
   rejectSmartFill: (id: string) => void;
+  acceptAllSmartFill: () => number;
+  upsertFormField: (field: FormField) => void;
   pushHistory: () => void;
   undo: () => void;
   redo: () => void;
@@ -97,7 +114,7 @@ function pushUndoEntry(state: {
   undoStack: HistoryEntry[];
   redoStack: HistoryEntry[];
 }): void {
-  // `current` unwraps immer drafts so structuredClone works reliably
+  // Unwrap immer drafts — snapshots must be plain JSON-safe objects
   state.undoStack.push(
     createSnapshot(current(state.overlays), current(state.formFields)),
   );
@@ -110,6 +127,7 @@ function pushUndoEntry(state: {
 export const useDocumentStore = create<DocumentState>()(
   immer((set, get) => ({
     documentBytes: null,
+    documentGen: 0,
     meta: null,
     mode: 'open',
     currentPage: 0,
@@ -135,15 +153,18 @@ export const useDocumentStore = create<DocumentState>()(
     redoStack: [],
 
     setDocument: (bytes, meta, formFields = []) => {
+      const gen = setHeldDocumentBytes(bytes);
       set((state) => {
-        state.documentBytes = bytes;
+        // Read back the held copy — never store a live Immer-drafted buffer
+        state.documentBytes = getHeldDocumentBytes();
+        state.documentGen = gen;
         state.meta = meta;
         state.pageCount = meta.pageCount;
         state.currentPage = 0;
-        state.mode = 'view';
+        state.mode = 'fill';
         state.overlays = [];
         state.selectedIds = [];
-        state.formFields = formFields;
+        state.formFields = dedupeFormFields(formFields);
         state.smartFillSuggestions = [];
         state.dirty = false;
         state.saveStatus = 'idle';
@@ -157,9 +178,37 @@ export const useDocumentStore = create<DocumentState>()(
       });
     },
 
+    replaceDocumentBytes: (bytes, pageCount) => {
+      const gen = setHeldDocumentBytes(bytes);
+      set((state) => {
+        state.documentBytes = getHeldDocumentBytes();
+        state.documentGen = gen;
+        if (typeof pageCount === 'number') {
+          state.pageCount = pageCount;
+          if (state.meta) {
+            state.meta = {
+              ...state.meta,
+              pageCount,
+              fileSize: bytes.byteLength,
+              lastModified: Date.now(),
+            };
+          }
+        } else if (state.meta) {
+          state.meta = {
+            ...state.meta,
+            fileSize: bytes.byteLength,
+            lastModified: Date.now(),
+          };
+        }
+        state.dirty = true;
+      });
+    },
+
     clearDocument: () => {
+      const gen = setHeldDocumentBytes(null);
       set((state) => {
         state.documentBytes = null;
+        state.documentGen = gen;
         state.meta = null;
         state.mode = 'open';
         state.currentPage = 0;
@@ -277,7 +326,7 @@ export const useDocumentStore = create<DocumentState>()(
           const newId = uuidv4();
           newIds.push(newId);
           copies.push({
-            ...structuredClone(overlay),
+            ...cloneData(current(overlay)),
             id: newId,
             x: overlay.x + 12,
             y: overlay.y + 12,
@@ -311,8 +360,21 @@ export const useDocumentStore = create<DocumentState>()(
 
     setFormValue: (fieldId, value) => {
       set((state) => {
-        const field = state.formFields.find((f) => f.id === fieldId);
-        if (!field || field.value === value) return;
+        let field = state.formFields.find((f) => f.id === fieldId);
+        if (!field) {
+          // Race: Smart Fill confirm + first keystroke in same tick
+          const suggestion = state.smartFillSuggestions.find(
+            (s) => s.id === fieldId,
+          );
+          if (suggestion) {
+            suggestion.confirmed = true;
+            field = suggestionToFormField(suggestion);
+            state.formFields.push(field);
+          } else {
+            return;
+          }
+        }
+        if (field.value === value) return;
         pushUndoEntry(state);
         field.value = value;
         state.dirty = true;
@@ -335,12 +397,21 @@ export const useDocumentStore = create<DocumentState>()(
       set((state) => {
         const suggestion = state.smartFillSuggestions.find((s) => s.id === id);
         if (!suggestion || suggestion.confirmed) return;
-
-        // Mark confirmed only — FormOverlay creates the overlay/field via
-        // onCreateFromSuggestion. Never mutate the PDF silently.
+        const overlapsExisting = state.formFields.some(
+          (f) =>
+            f.pageIndex === suggestion.pageIndex &&
+            fieldsClash(f.rect, suggestion.rect),
+        );
         suggestion.confirmed = true;
+        if (overlapsExisting) return;
+        pushUndoEntry(state);
+        const field = suggestionToFormField(suggestion);
+        if (!state.formFields.some((f) => f.id === field.id)) {
+          state.formFields.push(field);
+        }
+        state.formFields = dedupeFormFields(state.formFields);
         state.dirty = true;
-        state.statusMessage = `Smart Fill confirmed: ${suggestion.label ?? suggestion.kind}`;
+        state.statusMessage = `Ready to type: ${field.placeholder ?? suggestion.kind}`;
       });
     },
 
@@ -350,6 +421,52 @@ export const useDocumentStore = create<DocumentState>()(
           (s) => s.id !== id,
         );
         state.statusMessage = 'Smart Fill suggestion dismissed';
+      });
+    },
+
+    acceptAllSmartFill: () => {
+      let count = 0;
+      set((state) => {
+        const before = state.formFields.length;
+        const pending = filterSuggestionsAgainstFields(
+          state.smartFillSuggestions.filter((s) => !s.confirmed),
+          state.formFields,
+        );
+        for (const s of state.smartFillSuggestions) {
+          s.confirmed = true;
+        }
+        if (pending.length === 0) {
+          state.formFields = dedupeFormFields(state.formFields);
+          return;
+        }
+        pushUndoEntry(state);
+        for (const suggestion of pending) {
+          const field = suggestionToFormField(suggestion);
+          if (!state.formFields.some((f) => f.id === field.id)) {
+            state.formFields.push(field);
+          }
+        }
+        state.formFields = dedupeFormFields(state.formFields);
+        count = Math.max(0, state.formFields.length - before);
+        state.dirty = true;
+        state.statusMessage =
+          count > 0
+            ? `Ready to fill · ${state.formFields.length} field(s) — typing saves to disk`
+            : 'Form fields ready';
+      });
+      return count;
+    },
+
+    upsertFormField: (field) => {
+      set((state) => {
+        pushUndoEntry(state);
+        const idx = state.formFields.findIndex((f) => f.id === field.id);
+        if (idx >= 0) {
+          state.formFields[idx] = field;
+        } else {
+          state.formFields.push(field);
+        }
+        state.dirty = true;
       });
     },
 
@@ -371,7 +488,11 @@ export const useDocumentStore = create<DocumentState>()(
         const previous = state.undoStack.pop();
         if (!previous) return;
         state.redoStack.push(snapshot);
-        const restored = applySnapshot(previous, current(state.formFields));
+        // previous may still be an Immer proxy — applySnapshot clones safely
+        const restored = applySnapshot(
+          current(previous),
+          current(state.formFields),
+        );
         state.overlays = restored.overlays;
         state.formFields = restored.formFields;
         state.dirty = true;
@@ -391,7 +512,10 @@ export const useDocumentStore = create<DocumentState>()(
         const next = state.redoStack.pop();
         if (!next) return;
         state.undoStack.push(snapshot);
-        const restored = applySnapshot(next, current(state.formFields));
+        const restored = applySnapshot(
+          current(next),
+          current(state.formFields),
+        );
         state.overlays = restored.overlays;
         state.formFields = restored.formFields;
         state.dirty = true;

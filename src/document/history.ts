@@ -5,6 +5,14 @@ export type HistoryState = {
   redoStack: HistoryEntry[];
 };
 
+/**
+ * Deep-clone plain app data. Prefer JSON over structuredClone because undo
+ * stacks live inside Immer state and may be Proxies (structuredClone throws).
+ */
+export function cloneData<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
 export function createSnapshot(
   overlays: OverlayObject[],
   formFields: FormField[],
@@ -14,7 +22,7 @@ export function createSnapshot(
     formValues[field.id] = field.value;
   }
   return {
-    overlays: structuredClone(overlays),
+    overlays: cloneData(overlays),
     formValues,
   };
 }
@@ -23,10 +31,11 @@ export function applySnapshot(
   snapshot: HistoryEntry,
   formFields: FormField[],
 ): { overlays: OverlayObject[]; formFields: FormField[] } {
-  const overlays = structuredClone(snapshot.overlays);
+  const overlays = cloneData(snapshot.overlays);
+  const values = snapshot.formValues;
   const nextFields = formFields.map((field) => {
-    if (Object.prototype.hasOwnProperty.call(snapshot.formValues, field.id)) {
-      return { ...field, value: snapshot.formValues[field.id]! };
+    if (Object.prototype.hasOwnProperty.call(values, field.id)) {
+      return { ...field, value: values[field.id]! };
     }
     return field;
   });

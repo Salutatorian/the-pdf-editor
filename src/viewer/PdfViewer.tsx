@@ -26,7 +26,7 @@ export type PdfViewerProps = {
   onPageChange: (pageIndex: number) => void;
   zoom: number;
   zoomMode: ZoomMode;
-  onZoomChange?: (zoom: number) => void;
+  onZoomChange?: (zoom: number, source?: 'user' | 'fit') => void;
   rotation: PageRotation;
   searchQuery?: string;
   getPage: (pageIndex: number) => Promise<PDFPageProxy | null>;
@@ -91,7 +91,8 @@ export function PdfViewer({
       for (let i = 0; i < pageCount; i++) {
         const page = await getPage(i);
         if (!page || cancelled) return;
-        const viewport = page.getViewport({ scale: 1, rotation: 0 });
+        // Use page's own rotate (same as annotation sync) — don't force 0
+        const viewport = page.getViewport({ scale: 1 });
         next.set(i, {
           page,
           baseWidth: viewport.width,
@@ -126,9 +127,96 @@ export function PdfViewer({
   useEffect(() => {
     if (zoomMode === 'custom') return;
     if (Math.abs(resolvedZoom - zoom) > 0.001) {
-      onZoomChange?.(resolvedZoom);
+      onZoomChange?.(resolvedZoom, 'fit');
     }
   }, [resolvedZoom, zoom, zoomMode, onZoomChange]);
+
+  const zoomRef = useRef(resolvedZoom);
+  zoomRef.current = resolvedZoom;
+
+  /** Ctrl+wheel zoom, and Ctrl+middle-mouse drag up/down to zoom. */
+  useEffect(() => {
+    const root = containerRef.current;
+    if (!root || !onZoomChange) return;
+
+    const clampZoom = (z: number) => Math.min(5, Math.max(0.1, z));
+    const applyFactor = (factor: number) => {
+      onZoomChange(clampZoom(zoomRef.current * factor), 'user');
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      const direction = e.deltaY < 0 ? 1 : -1;
+      const steps = Math.min(3, Math.max(1, Math.abs(e.deltaY) / 100));
+      const factor = direction > 0 ? 1.1 ** steps : (1 / 1.1) ** steps;
+      applyFactor(factor);
+    };
+
+    let dragging = false;
+    let lastY = 0;
+    let pointerId: number | null = null;
+
+    const onPointerDown = (e: PointerEvent) => {
+      // button 1 = middle mouse
+      if (e.button !== 1 || !(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      dragging = true;
+      lastY = e.clientY;
+      pointerId = e.pointerId;
+      try {
+        root.setPointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (!dragging) return;
+      const dy = lastY - e.clientY;
+      lastY = e.clientY;
+      if (Math.abs(dy) < 1) return;
+      // Drag up → zoom in, drag down → zoom out
+      applyFactor(Math.exp(dy * 0.012));
+    };
+
+    const endDrag = (e: PointerEvent) => {
+      if (!dragging) return;
+      dragging = false;
+      if (pointerId !== null) {
+        try {
+          root.releasePointerCapture(pointerId);
+        } catch {
+          // ignore
+        }
+      }
+      pointerId = null;
+      e.preventDefault();
+    };
+
+    const onAuxClick = (e: MouseEvent) => {
+      // Prevent middle-click autoscroll / open-link while zooming
+      if (e.button === 1 && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+      }
+    };
+
+    root.addEventListener('wheel', onWheel, { passive: false });
+    root.addEventListener('pointerdown', onPointerDown);
+    root.addEventListener('pointermove', onPointerMove);
+    root.addEventListener('pointerup', endDrag);
+    root.addEventListener('pointercancel', endDrag);
+    root.addEventListener('auxclick', onAuxClick);
+
+    return () => {
+      root.removeEventListener('wheel', onWheel);
+      root.removeEventListener('pointerdown', onPointerDown);
+      root.removeEventListener('pointermove', onPointerMove);
+      root.removeEventListener('pointerup', endDrag);
+      root.removeEventListener('pointercancel', endDrag);
+      root.removeEventListener('auxclick', onAuxClick);
+    };
+  }, [onZoomChange]);
 
   const scrollToPage = useCallback((pageIndex: number) => {
     const root = containerRef.current;

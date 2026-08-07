@@ -86,7 +86,7 @@ export function AppShell({
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
-      <header className="shrink-0 border-b border-border bg-card/60 backdrop-blur-sm">
+      <header className="relative z-30 shrink-0 border-b border-border bg-card/60 backdrop-blur-sm">
         {toolbar}
       </header>
 
