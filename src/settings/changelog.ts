@@ -18,6 +18,17 @@ export type ChangelogRelease = {
  */
 export const CHANGELOG: readonly ChangelogRelease[] = [
   {
+    version: '1.3.1',
+    title: 'Slimmer installers',
+    date: '2026-08-07',
+    items: [
+      {
+        kind: 'improved',
+        text: 'Release downloads trimmed to Windows .exe, macOS .dmg, and Linux AppImage',
+      },
+    ],
+  },
+  {
     version: '1.3.0',
     title: 'Forms · overlays · Organize drag',
     date: '2026-08-07',
