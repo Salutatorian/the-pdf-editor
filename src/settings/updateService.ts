@@ -12,6 +12,11 @@ export type UpdateInfo = {
   htmlUrl: string;
 };
 
+export type UpdateProgress = {
+  downloaded: number;
+  contentLength: number | null;
+};
+
 function parseSemver(v: string): number[] {
   const cleaned = v.trim().replace(/^v/i, '');
   return cleaned.split('.').map((part) => {
@@ -47,7 +52,7 @@ export function isAllowedUpdateUrl(url: string): boolean {
   }
 }
 
-export async function checkForAppUpdate(): Promise<UpdateInfo | null> {
+async function checkViaGitHubApi(): Promise<UpdateInfo | null> {
   try {
     const res = await fetch(latestReleaseApiUrl(), {
       headers: { Accept: 'application/vnd.github+json' },
@@ -72,6 +77,27 @@ export async function checkForAppUpdate(): Promise<UpdateInfo | null> {
   }
 }
 
+/** Prefer Tauri updater endpoint; fall back to GitHub Releases API. */
+export async function checkForAppUpdate(): Promise<UpdateInfo | null> {
+  if (isTauri()) {
+    try {
+      const { check } = await import('@tauri-apps/plugin-updater');
+      const update = await check();
+      if (update) {
+        return {
+          version: update.version,
+          body: update.body ?? null,
+          htmlUrl: releasesUrl(),
+        };
+      }
+      return null;
+    } catch {
+      // Fall through to GitHub API (e.g. missing latest.json on older releases)
+    }
+  }
+  return checkViaGitHubApi();
+}
+
 export async function openUpdateDownload(info: UpdateInfo): Promise<void> {
   const url = isAllowedUpdateUrl(info.htmlUrl) ? info.htmlUrl : releasesUrl();
   if (!isAllowedUpdateUrl(url)) return;
@@ -86,4 +112,52 @@ export async function openUpdateDownload(info: UpdateInfo): Promise<void> {
     }
   }
   window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+/**
+ * Download + install the update in-app, then relaunch.
+ * Falls back to opening the GitHub release page if the updater is unavailable.
+ */
+export async function installAppUpdate(
+  info: UpdateInfo,
+  onProgress?: (progress: UpdateProgress) => void,
+): Promise<'installed' | 'opened-browser'> {
+  if (isTauri()) {
+    try {
+      const { check } = await import('@tauri-apps/plugin-updater');
+      const { relaunch } = await import('@tauri-apps/plugin-process');
+      const update = await check();
+      if (!update) {
+        await openUpdateDownload(info);
+        return 'opened-browser';
+      }
+
+      let downloaded = 0;
+      let contentLength: number | null = null;
+      await update.downloadAndInstall((event) => {
+        if (event.event === 'Started') {
+          contentLength = event.data.contentLength ?? null;
+          downloaded = 0;
+          onProgress?.({ downloaded, contentLength });
+          return;
+        }
+        if (event.event === 'Progress') {
+          downloaded += event.data.chunkLength;
+          onProgress?.({ downloaded, contentLength });
+          return;
+        }
+        if (event.event === 'Finished') {
+          onProgress?.({ downloaded, contentLength });
+        }
+      });
+      await relaunch();
+      return 'installed';
+    } catch {
+      await openUpdateDownload(info);
+      return 'opened-browser';
+    }
+  }
+
+  await openUpdateDownload(info);
+  return 'opened-browser';
 }

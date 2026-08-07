@@ -31,8 +31,9 @@ import {
 } from './settings/theme.ts';
 import {
   checkForAppUpdate,
-  openUpdateDownload,
+  installAppUpdate,
   type UpdateInfo,
+  type UpdateProgress,
 } from './settings/updateService.ts';
 import { setOpenAtLoginEnabled } from './settings/autostart.ts';
 import { restoreUiAfterNativeDialog } from './settings/windowActions.ts';
@@ -222,6 +223,10 @@ function AppInner() {
   const [theme, setThemeState] = useState<ThemeMode>(() => getTheme());
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [showUpdateToast, setShowUpdateToast] = useState(false);
+  const [updateInstalling, setUpdateInstalling] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(
+    null,
+  );
   const [whatsNewVersion, setWhatsNewVersion] = useState<string | null>(null);
   const [compareResult, setCompareResult] = useState<CompareResultView | null>(
     null,
@@ -351,17 +356,27 @@ function AppInner() {
   }, []);
 
   const onUpdateToastCancel = useCallback(() => {
+    if (updateInstalling) return;
     if (updateInfo) {
       patchAppSettings({ dismissedUpdateVersion: updateInfo.version });
     }
     setShowUpdateToast(false);
-  }, [updateInfo]);
+  }, [updateInfo, updateInstalling]);
 
   const onUpdateToastConfirm = useCallback(() => {
-    if (!updateInfo) return;
-    void openUpdateDownload(updateInfo);
-    setShowUpdateToast(false);
-  }, [updateInfo]);
+    if (!updateInfo || updateInstalling) return;
+    setUpdateInstalling(true);
+    setUpdateProgress(null);
+    void (async () => {
+      const result = await installAppUpdate(updateInfo, setUpdateProgress);
+      if (result === 'opened-browser') {
+        setUpdateInstalling(false);
+        setUpdateProgress(null);
+        setShowUpdateToast(false);
+      }
+      // 'installed' relaunches — no need to reset UI
+    })();
+  }, [updateInfo, updateInstalling]);
 
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -1936,6 +1951,8 @@ function AppInner() {
       {showUpdateToast && updateInfo ? (
         <UpdateToast
           update={updateInfo}
+          installing={updateInstalling}
+          progress={updateProgress}
           onUpdate={onUpdateToastConfirm}
           onCancel={onUpdateToastCancel}
         />

@@ -24,6 +24,10 @@ export const CHANGELOG: readonly ChangelogRelease[] = [
     items: [
       {
         kind: 'added',
+        text: 'In-app auto-update — Update installs and relaunches without a manual redownload',
+      },
+      {
+        kind: 'added',
         text: 'Dark / light theme toggle in the toolbar and Settings',
       },
       {

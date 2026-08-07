@@ -61,6 +61,8 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.event.inputs.tag || github.ref_name }}
           releaseName: pdf_editor ${{ github.event.inputs.tag || github.ref_name }}
@@ -74,7 +76,10 @@ jobs:
             - **macOS:** Apple Silicon + Intel builds
             - **Linux:** AppImage / deb
 
+            In-app updates: after installing this build, future versions install from the Update toast without a manual redownload.
+
             See the README for screenshots and features.
           releaseDraft: false
           prerelease: false
+          updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
