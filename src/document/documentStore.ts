@@ -133,7 +133,7 @@ export const useDocumentStore = create<DocumentState>()(
     currentPage: 0,
     pageCount: 0,
     zoom: 1,
-    zoomMode: 'fit-width',
+    zoomMode: 'fit-page',
     rotation: 0,
     searchQuery: '',
     searchMatches: [],
@@ -162,6 +162,8 @@ export const useDocumentStore = create<DocumentState>()(
         state.pageCount = meta.pageCount;
         state.currentPage = 0;
         state.mode = 'fill';
+        state.zoom = 1;
+        state.zoomMode = 'fit-page';
         state.overlays = [];
         state.selectedIds = [];
         state.formFields = dedupeFormFields(formFields);
@@ -213,6 +215,8 @@ export const useDocumentStore = create<DocumentState>()(
         state.mode = 'open';
         state.currentPage = 0;
         state.pageCount = 0;
+        state.zoom = 1;
+        state.zoomMode = 'fit-page';
         state.overlays = [];
         state.selectedIds = [];
         state.formFields = [];

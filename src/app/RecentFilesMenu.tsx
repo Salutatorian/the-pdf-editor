@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Clock3, FileText, Trash2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { RecentFileEntry } from '@/document/types';
@@ -32,7 +33,9 @@ function RecentFileRow({
       >
         <FileText className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium">{file.name}</span>
+          <span className="block truncate text-sm font-medium text-foreground">
+            {file.name}
+          </span>
           <span className="block truncate text-[10px] text-muted-foreground">
             {formatOpenedAt(file.openedAt)}
             {file.path !== file.name ? ` · ${file.path}` : ''}
@@ -63,18 +66,60 @@ export function RecentFilesMenu({
   variant = 'toolbar',
 }: RecentFilesMenuProps) {
   const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDetailsElement>(null);
+  const triggerWrapRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0, width: 320 });
+
+  useLayoutEffect(() => {
+    if (!open || !triggerWrapRef.current) return;
+    const update = () => {
+      const r = triggerWrapRef.current!.getBoundingClientRect();
+      const width = Math.min(352, Math.max(260, window.innerWidth - 16));
+      let left = r.left;
+      if (left + width > window.innerWidth - 8) {
+        left = Math.max(8, window.innerWidth - width - 8);
+      }
+      setMenuPos({
+        top: r.bottom + 4,
+        left,
+        width,
+      });
+    };
+    update();
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    return () => {
+      window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update, true);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
+    // Use click (not mousedown) so menu item clicks finish before outside-close
     const onDoc = (e: MouseEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) {
-        setOpen(false);
-        rootRef.current?.removeAttribute('open');
+      const t = e.target as Node;
+      if (
+        triggerWrapRef.current?.contains(t) ||
+        menuRef.current?.contains(t)
+      ) {
+        return;
       }
+      setOpen(false);
     };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    // Defer so the opening click doesn't immediately close
+    const timer = window.setTimeout(() => {
+      document.addEventListener('click', onDoc);
+    }, 0);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener('click', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
   }, [open]);
 
   if (variant === 'panel') {
@@ -122,16 +167,74 @@ export function RecentFilesMenu({
     );
   }
 
+  const menu = open
+    ? createPortal(
+        <div
+          ref={menuRef}
+          role="menu"
+          aria-label="Recent files"
+          className="fixed z-[200] overflow-hidden rounded-md border border-border bg-card text-card-foreground shadow-lg"
+          style={{
+            top: menuPos.top,
+            left: menuPos.left,
+            width: menuPos.width,
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between border-b border-border/70 px-3 py-2">
+            <span className="text-xs font-medium text-foreground">
+              Recent files
+            </span>
+            {files.length > 0 ? (
+              <button
+                type="button"
+                className="text-[10px] text-muted-foreground hover:text-foreground"
+                onClick={() => onClear()}
+              >
+                Clear all
+              </button>
+            ) : null}
+          </div>
+          {files.length === 0 ? (
+            <p className="px-3 py-4 text-xs text-muted-foreground">
+              No recent PDFs yet. Open a file to start the list.
+            </p>
+          ) : (
+            <ul className="max-h-72 overflow-y-auto p-1">
+              {files.map((f) => (
+                <RecentFileRow
+                  key={f.path}
+                  file={f}
+                  onOpen={() => {
+                    setOpen(false);
+                    onOpen(f.path, f.name);
+                  }}
+                  onRemove={() => onRemove(f.path)}
+                />
+              ))}
+            </ul>
+          )}
+        </div>,
+        document.body,
+      )
+    : null;
+
   return (
-    <details
-      ref={rootRef}
-      className="relative"
-      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
-    >
-      <summary
-        className="flex h-7 cursor-pointer list-none items-center gap-1 rounded-md px-2 text-muted-foreground hover:bg-muted hover:text-foreground [&::-webkit-details-marker]:hidden"
+    <div ref={triggerWrapRef} className="relative">
+      <Button
+        type="button"
+        variant={open ? 'secondary' : 'ghost'}
+        size="sm"
+        className="h-7 gap-1 px-2 text-muted-foreground hover:text-foreground"
         title="Recent files"
         aria-label={`Recent files${files.length ? ` (${files.length})` : ''}`}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
       >
         <Clock3 className="size-3.5" />
         <span className="hidden text-[11px] sm:inline">Recent</span>
@@ -140,44 +243,8 @@ export function RecentFilesMenu({
             {files.length}
           </span>
         ) : null}
-      </summary>
-      <div className="absolute left-0 z-50 mt-1 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-md border border-border bg-card shadow-lg">
-        <div className="flex items-center justify-between border-b border-border/70 px-3 py-2">
-          <span className="text-xs font-medium">Recent files</span>
-          {files.length > 0 ? (
-            <button
-              type="button"
-              className="text-[10px] text-muted-foreground hover:text-foreground"
-              onClick={(e) => {
-                e.preventDefault();
-                onClear();
-              }}
-            >
-              Clear all
-            </button>
-          ) : null}
-        </div>
-        {files.length === 0 ? (
-          <p className="px-3 py-4 text-xs text-muted-foreground">
-            No recent PDFs yet. Open a file to start the list.
-          </p>
-        ) : (
-          <ul className="max-h-72 overflow-y-auto p-1">
-            {files.map((f) => (
-              <RecentFileRow
-                key={f.path}
-                file={f}
-                onOpen={() => {
-                  onOpen(f.path, f.name);
-                  setOpen(false);
-                  rootRef.current?.removeAttribute('open');
-                }}
-                onRemove={() => onRemove(f.path)}
-              />
-            ))}
-          </ul>
-        )}
-      </div>
-    </details>
+      </Button>
+      {menu}
+    </div>
   );
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   detectSmartFillSuggestions,
   filterSuggestionsAgainstFields,
+  normalizeFieldType,
   placeholderFromLabel,
   suggestionToFormField,
 } from './SmartFill.ts';
@@ -332,5 +333,87 @@ describe('detectSmartFillSuggestions', () => {
     });
     expect(field.placeholder).toBe('Address');
     expect(field.type).toBe('text');
+  });
+
+  it('detects Express shipping option as a checkbox', () => {
+    const suggestions = detectSmartFillSuggestions(612, 792, 0, [
+      {
+        str: 'Ocean',
+        transform: [1, 0, 0, 1, 100, 400],
+        width: 40,
+        height: 12,
+      },
+      {
+        str: 'Air',
+        transform: [1, 0, 0, 1, 180, 400],
+        width: 24,
+        height: 12,
+      },
+      {
+        str: 'Ground',
+        transform: [1, 0, 0, 1, 240, 400],
+        width: 48,
+        height: 12,
+      },
+      {
+        str: 'Express',
+        transform: [1, 0, 0, 1, 320, 400],
+        width: 50,
+        height: 12,
+      },
+    ]);
+    const checks = suggestions.filter((s) => s.kind === 'checkbox');
+    expect(checks.length).toBe(4);
+    expect(checks.some((s) => /express/i.test(s.label ?? ''))).toBe(true);
+  });
+
+  it('prefers checkbox over overlapping text suggestion', () => {
+    const suggestions = detectSmartFillSuggestions(612, 792, 0, [
+      {
+        str: 'Shipping preference:',
+        transform: [1, 0, 0, 1, 40, 420],
+        width: 120,
+        height: 12,
+      },
+      {
+        str: '____________',
+        transform: [1, 0, 0, 1, 80, 400],
+        width: 14,
+        height: 12,
+      },
+      {
+        str: 'Ocean',
+        transform: [1, 0, 0, 1, 100, 400],
+        width: 40,
+        height: 12,
+      },
+    ]);
+    expect(suggestions.some((s) => s.kind === 'checkbox')).toBe(true);
+    // Tiny blank under the option must not become a type-in field
+    expect(
+      suggestions.every(
+        (s) =>
+          !(
+            s.kind === 'text' &&
+            s.rect.width <= 26 &&
+            s.rect.height <= 26
+          ),
+      ),
+    ).toBe(true);
+  });
+
+  it('promotes tiny square text widgets to checkboxes', () => {
+    const field = normalizeFieldType({
+      id: '1',
+      name: 'preference',
+      type: 'text',
+      pageIndex: 0,
+      rect: { x: 10, y: 10, width: 14, height: 14 },
+      value: 'pre',
+      placeholder: 'preference',
+    });
+    expect(field.type).toBe('checkbox');
+    expect(field.value).toBe('false');
+    expect(field.placeholder).toBe('');
   });
 });

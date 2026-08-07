@@ -255,16 +255,58 @@ function drawFilledFormFields(
     if (!text) continue;
     // Helvetica / WinAnsi — drop characters that would throw on save
     const safe = text.replace(/[^\x09\x0A\x0D\x20-\x7E]/g, '?');
-    const size = Math.min(12, Math.max(8, field.rect.height * 0.65));
-    page.drawText(safe, {
-      x: field.rect.x + 2,
-      y: pdfY + (field.rect.height - size) / 2,
-      size,
-      font,
-      color: rgb(0, 0, 0),
-      maxWidth: field.rect.width - 4,
-    });
+    const maxWidth = Math.max(8, field.rect.width - 4);
+    const size = Math.min(
+      11,
+      Math.max(8, Math.min(field.rect.height * 0.55, 12)),
+    );
+    const lineHeight = size * 1.2;
+    const lines = wrapTextToWidth(safe, font, size, maxWidth);
+    const maxLines = Math.max(1, Math.floor(field.rect.height / lineHeight));
+    // PDF y grows up — start at top of box and step down; clip extras
+    let cursorY = pdfY + field.rect.height - size - 1;
+    for (let i = 0; i < Math.min(lines.length, maxLines); i++) {
+      const line = lines[i];
+      if (line === undefined) continue;
+      page.drawText(line, {
+        x: field.rect.x + 2,
+        y: cursorY,
+        size,
+        font,
+        color: rgb(0, 0, 0),
+      });
+      cursorY -= lineHeight;
+      if (cursorY < pdfY - 1) break;
+    }
   }
+}
+
+/** Soft-wrap so saved ink stays inside the field (no Stirling-style sideways spill). */
+function wrapTextToWidth(
+  text: string,
+  font: PDFFont,
+  size: number,
+  maxWidth: number,
+): string[] {
+  const out: string[] = [];
+  for (const paragraph of text.split(/\r?\n/)) {
+    if (!paragraph) {
+      out.push('');
+      continue;
+    }
+    let line = '';
+    for (const ch of paragraph) {
+      const next = line + ch;
+      if (line && font.widthOfTextAtSize(next, size) > maxWidth) {
+        out.push(line);
+        line = ch === ' ' ? '' : ch;
+      } else {
+        line = next;
+      }
+    }
+    if (line) out.push(line);
+  }
+  return out.length > 0 ? out : [''];
 }
 
 function drawOverlay(

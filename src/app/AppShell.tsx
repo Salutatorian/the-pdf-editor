@@ -86,9 +86,11 @@ export function AppShell({
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
-      <header className="relative z-30 shrink-0 border-b border-border bg-card/60 backdrop-blur-sm">
-        {toolbar}
-      </header>
+      {toolbar ? (
+        <header className="relative z-40 shrink-0 overflow-visible border-b border-border bg-card/60 backdrop-blur-sm">
+          {toolbar}
+        </header>
+      ) : null}
 
       <div
         className={cn(

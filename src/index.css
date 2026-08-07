@@ -3,10 +3,10 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* pdf_editor — charcoal shell + steel-blue accent (ReUI Frame-inspired) */
+/* pdf_editor — cool gray paper + steel-blue accent (ReUI Frame-inspired) */
 :root {
   --radius: 0.5rem;
-  /* Light-only shell — cool gray paper + steel-blue accent */
+  /* Light shell */
   --background: oklch(0.975 0.006 250);
   --foreground: oklch(0.24 0.02 250);
   --card: oklch(1 0 0);
@@ -42,6 +42,7 @@
   --chart-4: oklch(0.55 0.2 25);
   --chart-5: oklch(0.55 0.1 300);
   --canvas: oklch(0.93 0.008 250);
+  --canvas-dot: oklch(0.55 0.01 250 / 0.18);
   --toolbar-h: 2.75rem;
   --statusbar-h: 1.75rem;
   --sidebar-w: 13.75rem;
@@ -49,6 +50,47 @@
   --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
   --font-serif: "IBM Plex Serif", Georgia, serif;
   color-scheme: light;
+}
+
+/* Charcoal shell — toggle via html.dark */
+.dark {
+  --background: oklch(0.145 0.008 250);
+  --foreground: oklch(0.93 0.005 250);
+  --card: oklch(0.185 0.01 250);
+  --card-foreground: oklch(0.93 0.005 250);
+  --popover: oklch(0.185 0.01 250);
+  --popover-foreground: oklch(0.93 0.005 250);
+  --primary: oklch(0.68 0.14 245);
+  --primary-foreground: oklch(0.15 0.02 250);
+  --secondary: oklch(0.22 0.012 250);
+  --secondary-foreground: oklch(0.9 0.005 250);
+  --muted: oklch(0.22 0.01 250);
+  --muted-foreground: oklch(0.68 0.015 250);
+  --accent: oklch(0.26 0.02 245);
+  --accent-foreground: oklch(0.93 0.005 250);
+  --destructive: oklch(0.62 0.18 25);
+  --destructive-foreground: oklch(0.98 0 0);
+  --border: oklch(0.28 0.012 250);
+  --input: oklch(0.28 0.012 250);
+  --ring: oklch(0.68 0.14 245);
+  --success: oklch(0.72 0.15 155);
+  --warning: oklch(0.78 0.12 85);
+  --sidebar: oklch(0.165 0.01 250);
+  --sidebar-foreground: oklch(0.93 0.005 250);
+  --sidebar-primary: oklch(0.68 0.14 245);
+  --sidebar-primary-foreground: oklch(0.15 0.02 250);
+  --sidebar-accent: oklch(0.22 0.015 250);
+  --sidebar-accent-foreground: oklch(0.93 0.005 250);
+  --sidebar-border: oklch(0.28 0.012 250);
+  --sidebar-ring: oklch(0.68 0.14 245);
+  --chart-1: oklch(0.68 0.14 245);
+  --chart-2: oklch(0.72 0.15 155);
+  --chart-3: oklch(0.78 0.12 85);
+  --chart-4: oklch(0.62 0.18 25);
+  --chart-5: oklch(0.6 0.1 300);
+  --canvas: oklch(0.12 0.006 250);
+  --canvas-dot: oklch(0.55 0.01 250 / 0.22);
+  color-scheme: dark;
 }
 
 @theme inline {
@@ -120,10 +162,7 @@
 /* ReUI-inspired dotted canvas backdrop */
 .bg-dot-grid {
   background-color: var(--canvas);
-  background-image: radial-gradient(
-    oklch(0.55 0.01 250 / 0.18) 1px,
-    transparent 1px
-  );
+  background-image: radial-gradient(var(--canvas-dot) 1px, transparent 1px);
   background-size: 14px 14px;
 }
 

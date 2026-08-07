@@ -18,6 +18,41 @@ export type ChangelogRelease = {
  */
 export const CHANGELOG: readonly ChangelogRelease[] = [
   {
+    version: '1.3.0',
+    title: 'Forms · overlays · Organize drag',
+    date: '2026-08-07',
+    items: [
+      {
+        kind: 'added',
+        text: 'Dark / light theme toggle in the toolbar and Settings',
+      },
+      {
+        kind: 'added',
+        text: 'Drag page tiles in Organize to reorder (multi-select moves as a block)',
+      },
+      {
+        kind: 'added',
+        text: 'Add-mode overlays stay editable after save and reopen',
+      },
+      {
+        kind: 'improved',
+        text: 'Smart Fill: checkboxes, Express fields, tall notes, and date text',
+      },
+      {
+        kind: 'improved',
+        text: 'Inline edit for Add text / date / initials; image pick on place',
+      },
+      {
+        kind: 'improved',
+        text: 'Recent files menu and welcome screen polish',
+      },
+      {
+        kind: 'improved',
+        text: 'New PDFs open fit-to-page so the whole page is visible',
+      },
+    ],
+  },
+  {
     version: '1.2.0',
     title: 'Light UI · safer save · release builds',
     date: '2026-08-07',

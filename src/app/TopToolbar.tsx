@@ -33,10 +33,13 @@ import {
   ScanText,
   Keyboard,
   Settings,
+  Sun,
+  Moon,
 } from 'lucide-react';
 import { RecentFilesMenu } from './RecentFilesMenu';
 import { MODES, type AppMode } from './modes';
 import type { OverlayKind, RecentFileEntry } from '../document/types';
+import type { ThemeMode } from '../settings/theme';
 import { ADD_MODE_TOOLS } from '../overlay/tools';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -87,6 +90,8 @@ export type TopToolbarProps = {
   onOcr?: () => void;
   onShowShortcuts?: () => void;
   onOpenSettings?: () => void;
+  theme?: ThemeMode;
+  onToggleTheme?: () => void;
   /** Apple-style red badge on Settings when an update is available (no number). */
   updateAvailable?: boolean;
   recentFiles?: RecentFileEntry[];
@@ -166,6 +171,8 @@ export function TopToolbar({
   onOcr,
   onShowShortcuts,
   onOpenSettings,
+  theme = 'light',
+  onToggleTheme,
   updateAvailable = false,
   recentFiles = [],
   onOpenRecent,
@@ -181,7 +188,7 @@ export function TopToolbar({
   return (
     <TooltipProvider delayDuration={250}>
       <div className="flex min-w-0 flex-col" role="toolbar" aria-label="Main toolbar">
-      <div className="flex h-11 min-w-0 items-center gap-2 overflow-x-auto px-2">
+      <div className="flex h-11 min-w-0 items-center gap-2 overflow-visible px-2">
         <div className="flex items-baseline gap-1 px-2 pr-3">
           <span className="font-sans text-[14px] font-semibold tracking-tight text-foreground">
             pdf<span className="text-primary">_editor</span>
@@ -475,6 +482,16 @@ export function TopToolbar({
         ) : null}
 
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
+          <Tip label={theme === 'dark' ? 'Light mode' : 'Dark mode'}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              onClick={onToggleTheme}
+            >
+              {theme === 'dark' ? <Sun /> : <Moon />}
+            </Button>
+          </Tip>
           <Tip label="Keyboard shortcuts" shortcut="Ctrl+/">
             <Button
               variant="ghost"

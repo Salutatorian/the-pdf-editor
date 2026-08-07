@@ -25,6 +25,11 @@ import {
   patchAppSettings,
 } from './settings/appSettings.ts';
 import {
+  getTheme,
+  setTheme,
+  type ThemeMode,
+} from './settings/theme.ts';
+import {
   checkForAppUpdate,
   openUpdateDownload,
   type UpdateInfo,
@@ -99,6 +104,11 @@ import {
   removeRecentFile,
 } from './persistence/recentFiles.ts';
 import { clearDraft, saveDraft } from './persistence/drafts.ts';
+import {
+  loadAnnotationLayer,
+  saveAnnotationLayer,
+} from './persistence/annotationLayer.ts';
+import { getBasePdf, putBasePdf } from './persistence/basePdfCache.ts';
 import { protectPdf, unlockPdf } from './security/PdfSecurity.ts';
 import {
   PasswordDialog,
@@ -209,6 +219,7 @@ function AppInner() {
   const [ocrOpen, setOcrOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [theme, setThemeState] = useState<ThemeMode>(() => getTheme());
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [showUpdateToast, setShowUpdateToast] = useState(false);
   const [whatsNewVersion, setWhatsNewVersion] = useState<string | null>(null);
@@ -362,6 +373,20 @@ function AppInner() {
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [dirty]);
 
+  const persistWorkingEdits = useCallback(
+    async (path: string, baseBytes: Uint8Array) => {
+      if (!(path.includes('/') || path.includes('\\'))) return;
+      const state = useDocumentStore.getState();
+      saveAnnotationLayer({
+        path,
+        overlays: state.overlays,
+        formFields: state.formFields,
+      });
+      await putBasePdf(path, baseBytes);
+    },
+    [],
+  );
+
   /** Instant local draft backup on every edit (survives crash even if disk save lags). */
   useEffect(() => {
     if (!meta || !dirty) return;
@@ -441,6 +466,7 @@ function AppInner() {
                   `Written into the PDF file · reopen in Chrome/Edge/Preview to see your wording · ${new Date().toLocaleTimeString()}`,
                 );
                 clearDraft(savePath);
+                void persistWorkingEdits(savePath, saveBytes);
               }
             } else {
               store.setSaveStatus('error', result.error);
@@ -476,6 +502,7 @@ function AppInner() {
     formFields,
     saveIo,
     store,
+    persistWorkingEdits,
   ]);
 
   useEffect(() => {
@@ -528,24 +555,47 @@ function AppInner() {
 
       store.setStatus(`Opening ${name}…`);
       assertSafePdfBytes(bytes, name);
-      const fields = await loadAcroFormFields(bytes);
+
+      // Prefer unbaked working base so Add Text / overlays stay re-editable after reopen
+      const cachedBase = await getBasePdf(path);
       if (docSessionRef.current !== session) return;
+      const workingBytes = cachedBase ?? bytes;
+      assertSafePdfBytes(workingBytes, name);
+
+      const layer = loadAnnotationLayer(path);
+      const acroFields = await loadAcroFormFields(workingBytes);
+      if (docSessionRef.current !== session) return;
+
+      // Sidecar form fields survive flatten; prefer them when present
+      const fields =
+        layer && layer.formFields.length > 0 ? layer.formFields : acroFields;
 
       const metaDoc: DocumentMeta = {
         path,
         fileName: name,
         pageCount: 0,
-        fileSize: bytes.byteLength,
+        fileSize: workingBytes.byteLength,
         lastModified: Date.now(),
       };
-      const pdf = await PDFDocument.load(bytes, {
+      const pdf = await PDFDocument.load(workingBytes, {
         ignoreEncryption: true,
         updateMetadata: false,
       });
       if (docSessionRef.current !== session) return;
 
       metaDoc.pageCount = pdf.getPageCount();
-      store.setDocument(bytes, metaDoc, fields);
+      store.setDocument(workingBytes, metaDoc, fields);
+
+      if (layer && layer.overlays.length > 0) {
+        useDocumentStore.setState((s) => {
+          s.overlays = layer.overlays;
+          s.selectedIds = [];
+          s.dirty = false;
+          s.mode = 'add';
+        });
+        setAddTool('select');
+      }
+
       // Only remember absolute disk paths (drag/drop browser names can't reopen)
       if (path.includes('/') || path.includes('\\')) {
         const recent = addRecentFile({ path, name });
@@ -561,10 +611,13 @@ function AppInner() {
       setOcrOpen(false);
       setPasswordDialog({ open: false, mode: 'unlock', error: null });
       // setDocument already enters fill — avoid re-forcing mode later
+      const overlayN = layer?.overlays.length ?? 0;
       store.setStatus(
-        fields.length > 0
-          ? `Opened ${name} · ${fields.length} form field(s)`
-          : `Opened ${name}`,
+        overlayN > 0
+          ? `Opened ${name} · ${overlayN} editable annotation(s) restored`
+          : fields.length > 0
+            ? `Opened ${name} · ${fields.length} form field(s)`
+            : `Opened ${name}`,
       );
       await restoreUiAfterNativeDialog();
     },
@@ -674,11 +727,8 @@ function AppInner() {
             ? ' — file may be outside allowed folders; use Open'
             : '';
         store.setStatus(`${message}${scopeHint}`);
-        if (
-          /not found|no such file|empty|missing|access|scope|not allowed|forbidden|denied/i.test(
-            message,
-          )
-        ) {
+        // Only drop from Recent when the file is truly gone — keep entries on scope/permission errors
+        if (/not found|no such file|empty|missing/i.test(message)) {
           store.setRecentFiles(removeRecentFile(path));
         }
       } finally {
@@ -776,6 +826,7 @@ function AppInner() {
         });
         addRecentFile({ path: result.path, name: fileName });
         store.setRecentFiles(listRecentFiles());
+        void persistWorkingEdits(result.path, documentBytes);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -791,6 +842,7 @@ function AppInner() {
     saveIo,
     store,
     applySaveResult,
+    persistWorkingEdits,
   ]);
 
   const handleSave = useCallback(async () => {
@@ -815,6 +867,11 @@ function AppInner() {
         }),
       );
       applySaveResult(result, false);
+      if (result.success) {
+        addRecentFile({ path: meta.path, name: meta.fileName });
+        store.setRecentFiles(listRecentFiles());
+        void persistWorkingEdits(meta.path, documentBytes);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       store.setSaveStatus('error', message);
@@ -831,6 +888,7 @@ function AppInner() {
     store,
     applySaveResult,
     handleSaveAsFixed,
+    persistWorkingEdits,
   ]);
 
   const handlePrint = useCallback(() => {
@@ -1279,6 +1337,75 @@ function AppInner() {
     [],
   );
 
+  const pickOverlayImageFile = useCallback((): Promise<string | null> => {
+    return new Promise((resolve) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/png,image/jpeg,image/jpg,image/webp,image/gif';
+      input.onchange = () => {
+        const file = input.files?.[0];
+        if (!file) {
+          resolve(null);
+          return;
+        }
+        if (file.size > 8 * 1024 * 1024) {
+          store.setStatus('Image too large (max 8 MB)');
+          resolve(null);
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+          const url = typeof reader.result === 'string' ? reader.result : null;
+          if (!url || !/^data:image\//i.test(url)) {
+            store.setStatus('Could not read that image');
+            resolve(null);
+            return;
+          }
+          resolve(url);
+        };
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(file);
+      };
+      input.oncancel = () => resolve(null);
+      input.click();
+    });
+  }, [store]);
+
+  const placeImageAt = useCallback(
+    async (at: { pageIndex: number; x: number; y: number }) => {
+      const dataUrl = await pickOverlayImageFile();
+      await restoreUiAfterNativeDialog();
+      if (!dataUrl) return;
+      const zIndex = useDocumentStore.getState().overlays.length + 1;
+      store.addOverlay({
+        pageIndex: at.pageIndex,
+        kind: 'image',
+        x: at.x,
+        y: at.y,
+        width: 160,
+        height: 120,
+        rotation: 0,
+        zIndex,
+        imageDataUrl: dataUrl,
+        opacity: 1,
+      });
+      setAddTool('select');
+      store.setStatus('Image placed — drag to move, corners to resize');
+    },
+    [pickOverlayImageFile, store],
+  );
+
+  const replaceOverlayImage = useCallback(
+    async (overlayId: string) => {
+      const dataUrl = await pickOverlayImageFile();
+      await restoreUiAfterNativeDialog();
+      if (!dataUrl) return;
+      store.updateOverlay(overlayId, { imageDataUrl: dataUrl });
+      store.setStatus('Image updated');
+    },
+    [pickOverlayImageFile, store],
+  );
+
   const onSignatureSaved = useCallback(
     async (result: SignaturePadResult) => {
       const place = pendingSig;
@@ -1588,6 +1715,8 @@ function AppInner() {
       onOcr={() => setOcrOpen(true)}
       onShowShortcuts={() => setShortcutsOpen(true)}
       onOpenSettings={() => setSettingsOpen(true)}
+      theme={theme}
+      onToggleTheme={() => setThemeState(setTheme(theme === 'dark' ? 'light' : 'dark'))}
       updateAvailable={Boolean(updateInfo)}
       recentFiles={recentFiles}
       onOpenRecent={(path, name) => void handleOpenRecent(path, name)}
@@ -1599,7 +1728,7 @@ function AppInner() {
   return (
     <>
       <AppShell
-        toolbar={toolbar}
+        toolbar={emptyState ? null : toolbar}
         sidebar={
           emptyState ? null : (
             <ThumbnailSidebar
@@ -1647,6 +1776,11 @@ function AppInner() {
             onRemoveRecent={handleRemoveRecent}
             onClearRecent={handleClearRecent}
             onFileInput={(file) => void handleDropFiles([file])}
+            theme={theme}
+            onToggleTheme={() =>
+              setThemeState(setTheme(theme === 'dark' ? 'light' : 'dark'))
+            }
+            onOpenSettings={() => setSettingsOpen(true)}
           />
         ) : mode === 'organize' ? (
           <OrganizePanel
@@ -1709,6 +1843,15 @@ function AppInner() {
                       y: at.y,
                     })
                   }
+                  onRequestImage={(at) =>
+                    void placeImageAt({
+                      pageIndex,
+                      x: at.x,
+                      y: at.y,
+                    })
+                  }
+                  onReplaceImage={(id) => void replaceOverlayImage(id)}
+                  onToolConsumed={() => setAddTool('select')}
                 />
                 <FormOverlay
                   pageIndex={pageIndex}
@@ -1771,6 +1914,8 @@ function AppInner() {
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
+        theme={theme}
+        onThemeChange={(next) => setThemeState(setTheme(next))}
         updateAvailable={updateInfo}
         onUpdateAvailable={(info) => {
           setUpdateInfo(info);

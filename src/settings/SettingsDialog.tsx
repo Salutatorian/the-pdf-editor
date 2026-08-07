@@ -7,6 +7,8 @@ import {
   RefreshCw,
   ScrollText,
   Monitor,
+  Sun,
+  Moon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -39,10 +41,13 @@ import {
   type UpdateInfo,
 } from './updateService.ts';
 import { closeAppWindow, minimizeAppWindow } from './windowActions.ts';
+import type { ThemeMode } from './theme.ts';
 
 export type SettingsDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  theme: ThemeMode;
+  onThemeChange: (theme: ThemeMode) => void;
   updateAvailable: UpdateInfo | null;
   onUpdateAvailable: (info: UpdateInfo | null) => void;
   onShowWhatsNew: (version: string) => void;
@@ -114,6 +119,8 @@ function ReleaseNotes({ release }: { release: ChangelogRelease }) {
 export function SettingsDialog({
   open,
   onOpenChange,
+  theme,
+  onThemeChange,
   updateAvailable,
   onUpdateAvailable,
   onShowWhatsNew,
@@ -248,6 +255,41 @@ export function SettingsDialog({
                     macOS.
                   </p>
                 ) : null}
+              </section>
+
+              <Separator />
+
+              <section className="space-y-2">
+                <h3 className="flex items-center gap-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                  {theme === 'dark' ? (
+                    <Moon className="size-3" />
+                  ) : (
+                    <Sun className="size-3" />
+                  )}
+                  Appearance
+                </h3>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant={theme === 'light' ? 'secondary' : 'outline'}
+                    size="sm"
+                    className="gap-1.5"
+                    onClick={() => onThemeChange('light')}
+                  >
+                    <Sun className="size-3.5" />
+                    Light
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={theme === 'dark' ? 'secondary' : 'outline'}
+                    size="sm"
+                    className="gap-1.5"
+                    onClick={() => onThemeChange('dark')}
+                  >
+                    <Moon className="size-3.5" />
+                    Dark
+                  </Button>
+                </div>
               </section>
 
               <Separator />

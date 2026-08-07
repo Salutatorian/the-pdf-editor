@@ -2,12 +2,16 @@ import {
   FileUp,
   PenLine,
   FormInput,
+  Moon,
+  Sun,
+  Settings,
   type LucideIcon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Frame, FramePanel } from '@/components/frame';
 import type { RecentFileEntry } from '@/document/types';
+import type { ThemeMode } from '@/settings/theme';
 import { RecentFilesMenu } from '@/app/RecentFilesMenu';
 
 export type EmptyStateProps = {
@@ -17,6 +21,9 @@ export type EmptyStateProps = {
   onRemoveRecent: (path: string) => void;
   onClearRecent: () => void;
   onFileInput: (file: File) => void;
+  theme?: ThemeMode;
+  onToggleTheme?: () => void;
+  onOpenSettings?: () => void;
 };
 
 const ACTIONS: Array<{
@@ -50,12 +57,40 @@ export function EmptyState({
   onRemoveRecent,
   onClearRecent,
   onFileInput,
+  theme = 'light',
+  onToggleTheme,
+  onOpenSettings,
 }: EmptyStateProps) {
   return (
     <div
-      className="flex min-h-full items-center justify-center p-8"
+      className="relative flex min-h-full items-center justify-center p-8"
       data-testid="empty-state"
     >
+      <div className="absolute top-3 right-3 flex items-center gap-0.5">
+        {onToggleTheme ? (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={
+              theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
+            }
+            onClick={onToggleTheme}
+          >
+            {theme === 'dark' ? <Sun /> : <Moon />}
+          </Button>
+        ) : null}
+        {onOpenSettings ? (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Settings"
+            onClick={onOpenSettings}
+          >
+            <Settings />
+          </Button>
+        ) : null}
+      </div>
+
       <div className="mx-auto w-full max-w-3xl space-y-8">
         <div className="text-center">
           <h1 className="font-sans text-4xl font-semibold tracking-tight text-foreground">

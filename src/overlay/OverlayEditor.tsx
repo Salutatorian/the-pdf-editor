@@ -30,9 +30,15 @@ export type OverlayEditorProps = {
   activeTool: OverlayKind | null;
   interactive?: boolean;
   onSelect: (ids: string[], additive?: boolean) => void;
-  onAdd: (overlay: Omit<OverlayObject, 'id'> & { id?: string }) => void;
+  onAdd: (overlay: Omit<OverlayObject, 'id'> & { id?: string }) => string | void;
   onUpdate: (id: string, patch: Partial<OverlayObject>) => void;
   onRequestSignature?: (at: { x: number; y: number }) => void;
+  /** Pick an image file and place it at page coords */
+  onRequestImage?: (at: { x: number; y: number }) => void;
+  /** Replace image/signature pixels on an existing overlay */
+  onReplaceImage?: (overlayId: string) => void;
+  /** Called after a place tool finishes so the UI can return to Select */
+  onToolConsumed?: () => void;
 };
 
 function useHtmlImage(url: string | undefined): HTMLImageElement | null {
@@ -55,6 +61,7 @@ function OverlayNode({
   scale,
   draggable,
   onSelect,
+  onDblClick,
   onDragMove,
   onDragEnd,
   onTransformEnd,
@@ -64,6 +71,7 @@ function OverlayNode({
   scale: number;
   draggable: boolean;
   onSelect: (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => void;
+  onDblClick?: (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => void;
   onDragMove: (e: Konva.KonvaEventObject<DragEvent>) => void;
   onDragEnd: (e: Konva.KonvaEventObject<DragEvent>) => void;
   onTransformEnd: (e: Konva.KonvaEventObject<Event>) => void;
@@ -81,6 +89,8 @@ function OverlayNode({
     opacity: overlay.opacity ?? 1,
     onClick: onSelect,
     onTap: onSelect,
+    onDblClick,
+    onDblTap: onDblClick,
     onDragMove,
     onDragEnd,
     onTransformEnd,
@@ -95,13 +105,25 @@ function OverlayNode({
     case 'date':
     case 'initials':
       return (
-        <Text
-          {...common}
-          text={overlay.text ?? (overlay.kind === 'date' ? new Date().toLocaleDateString() : '')}
-          fontSize={(overlay.fontSize ?? 14) * scale}
-          fontFamily={overlay.fontFamily ?? 'IBM Plex Sans'}
-          fill={overlay.color ?? '#111111'}
-        />
+        <Group>
+          {/* Opaque pad so restored annotations cover baked ink underneath */}
+          <Rect
+            x={overlay.x * scale}
+            y={overlay.y * scale}
+            width={overlay.width * scale}
+            height={overlay.height * scale}
+            fill="#ffffff"
+            opacity={0.92}
+            listening={false}
+          />
+          <Text
+            {...common}
+            text={overlay.text ?? (overlay.kind === 'date' ? new Date().toLocaleDateString() : '')}
+            fontSize={(overlay.fontSize ?? 14) * scale}
+            fontFamily={overlay.fontFamily ?? 'IBM Plex Sans'}
+            fill={overlay.color ?? '#111111'}
+          />
+        </Group>
       );
     case 'highlight':
       return (
@@ -249,7 +271,7 @@ function defaultOverlayFromTool(
   };
   switch (tool.kind) {
     case 'text':
-      return { ...base, text: 'Text', fontSize: 14 };
+      return { ...base, text: '', fontSize: 14 };
     case 'date':
       return { ...base, text: today, fontSize: 14 };
     case 'initials':
@@ -286,6 +308,9 @@ export function OverlayEditor({
   onAdd,
   onUpdate,
   onRequestSignature,
+  onRequestImage,
+  onReplaceImage,
+  onToolConsumed,
 }: OverlayEditorProps) {
   const stageRef = useRef<Konva.Stage>(null);
   const trRef = useRef<Konva.Transformer>(null);
@@ -298,6 +323,9 @@ export function OverlayEditor({
     width: number;
     height: number;
   } | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState('');
+  const editRef = useRef<HTMLTextAreaElement>(null);
 
   const pageOverlays = useMemo(
     () =>
@@ -306,6 +334,52 @@ export function OverlayEditor({
         .sort((a, b) => a.zIndex - b.zIndex),
     [overlays, pageIndex],
   );
+
+  const editingOverlay = editingId
+    ? pageOverlays.find((o) => o.id === editingId) ?? null
+    : null;
+
+  useEffect(() => {
+    if (!editingId) return;
+    const stillThere = overlays.some((o) => o.id === editingId);
+    if (!stillThere) setEditingId(null);
+  }, [overlays, editingId]);
+
+  useEffect(() => {
+    if (!editingOverlay) return;
+    editRef.current?.focus();
+    editRef.current?.select();
+  }, [editingOverlay?.id]);
+
+  const beginEdit = (overlay: OverlayObject) => {
+    if (
+      overlay.kind === 'image' ||
+      overlay.kind === 'signature'
+    ) {
+      onSelect([overlay.id]);
+      onReplaceImage?.(overlay.id);
+      return;
+    }
+    if (
+      overlay.kind !== 'text' &&
+      overlay.kind !== 'date' &&
+      overlay.kind !== 'initials'
+    ) {
+      return;
+    }
+    onSelect([overlay.id]);
+    setEditDraft(
+      overlay.text ??
+        (overlay.kind === 'date' ? new Date().toLocaleDateString() : ''),
+    );
+    setEditingId(overlay.id);
+  };
+
+  const commitEdit = () => {
+    if (!editingId) return;
+    onUpdate(editingId, { text: editDraft });
+    setEditingId(null);
+  };
 
   useEffect(() => {
     const tr = trRef.current;
@@ -352,6 +426,10 @@ export function OverlayEditor({
         onRequestSignature?.({ x, y });
         return;
       }
+      if (activeTool === 'image') {
+        onRequestImage?.({ x, y });
+        return;
+      }
       if (activeTool === 'draw' || activeTool === 'highlight' || activeTool === 'redact') {
         return;
       }
@@ -360,7 +438,19 @@ export function OverlayEditor({
       if (!tool) return;
       const zIndex =
         pageOverlays.reduce((m, o) => Math.max(m, o.zIndex), 0) + 1;
-      onAdd(defaultOverlayFromTool(tool, pageIndex, x, y, zIndex));
+      const created = defaultOverlayFromTool(tool, pageIndex, x, y, zIndex);
+      const id = onAdd(created);
+      if (
+        typeof id === 'string' &&
+        (created.kind === 'text' ||
+          created.kind === 'date' ||
+          created.kind === 'initials')
+      ) {
+        setEditDraft(created.text ?? '');
+        setEditingId(id);
+      }
+      // Return to Select so the user can move/resize immediately
+      onToolConsumed?.();
     }
   };
 
@@ -419,6 +509,7 @@ export function OverlayEditor({
         color: '#111111',
         strokeWidth: 2,
       });
+      onToolConsumed?.();
     }
     if (highlightDraft) {
       const x = Math.min(highlightDraft.x, highlightDraft.x + highlightDraft.width);
@@ -441,6 +532,7 @@ export function OverlayEditor({
           color: isRedact ? '#000000' : '#ffe566',
           opacity: 1,
         });
+        onToolConsumed?.();
       }
     }
     setDrawing(null);
@@ -448,6 +540,7 @@ export function OverlayEditor({
   };
 
   return (
+    <div className="overlay-editor-root" style={{ position: 'absolute', inset: 0 }}>
     <Stage
       ref={stageRef}
       width={stageW}
@@ -467,11 +560,11 @@ export function OverlayEditor({
     >
       <Layer>
         {pageOverlays.map((overlay) => (
-          <Group key={overlay.id}>
+          <Group key={overlay.id} visible={overlay.id !== editingId}>
             <OverlayNode
               overlay={overlay}
               scale={scale}
-              draggable={interactive}
+              draggable={interactive && !editingId}
               nodeRefs={nodeRefs.current}
               onSelect={(e) => {
                 e.cancelBubble = true;
@@ -479,6 +572,11 @@ export function OverlayEditor({
                   [overlay.id],
                   e.evt.shiftKey || e.evt.ctrlKey || e.evt.metaKey,
                 );
+              }}
+              onDblClick={(e) => {
+                e.cancelBubble = true;
+                if (!interactive) return;
+                beginEdit(overlay);
               }}
               onDragMove={(e) => {
                 const node = e.target;
@@ -562,7 +660,7 @@ export function OverlayEditor({
           ),
         )}
 
-        {interactive && !activeTool ? (
+        {interactive && !activeTool && !editingId ? (
           <Transformer
             ref={trRef}
             rotateEnabled
@@ -574,5 +672,52 @@ export function OverlayEditor({
         ) : null}
       </Layer>
     </Stage>
+    {editingOverlay ? (
+      <textarea
+        ref={editRef}
+        className="overlay-text-editor"
+        value={editDraft}
+        placeholder="Type here…"
+        aria-label="Edit text"
+        style={{
+          position: 'absolute',
+          left: editingOverlay.x * scale,
+          top: editingOverlay.y * scale,
+          width: Math.max(editingOverlay.width * scale, 64),
+          height: Math.max(editingOverlay.height * scale, 24),
+          fontSize: (editingOverlay.fontSize ?? 14) * scale,
+          fontFamily: editingOverlay.fontFamily ?? 'IBM Plex Sans',
+          color: editingOverlay.color ?? '#111111',
+          lineHeight: 1.2,
+          margin: 0,
+          padding: '1px 2px',
+          border: '1px solid rgba(47, 127, 212, 0.85)',
+          borderRadius: 2,
+          background: 'rgba(255,255,255,0.96)',
+          resize: 'none',
+          overflow: 'hidden',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+          zIndex: 5,
+          boxSizing: 'border-box',
+          outline: 'none',
+        }}
+        onChange={(e) => setEditDraft(e.target.value)}
+        onBlur={() => commitEdit()}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            setEditingId(null);
+            return;
+          }
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            commitEdit();
+          }
+        }}
+      />
+    ) : null}
+    </div>
   );
 }

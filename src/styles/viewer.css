@@ -109,6 +109,25 @@
   font-weight: 400;
 }
 
+/* Wrap inside the box — never spill horizontally past the field */
+.form-overlay__field--wrap,
+.form-overlay__field--multiline {
+  resize: none;
+  overflow: hidden;
+  padding: 2px 4px;
+  line-height: 1.25;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  vertical-align: top;
+}
+
+/* Tall notes: a bit more padding, still clipped to the printed box */
+.form-overlay__field--multiline {
+  padding: 4px 5px;
+  line-height: 1.3;
+}
+
 .form-overlay__field--checkbox,
 .form-overlay__field--radio {
   display: flex;

@@ -71,6 +71,7 @@ const CHECKBOX_WORD_LABELS = [
   'agree',
   'accept',
   'ground',
+  'express',
   'rail',
   'truck',
   'delivery',
@@ -135,6 +136,77 @@ export function rectsOverlap(a: FormFieldRect, b: FormFieldRect): boolean {
   );
 }
 
+/** Tiny near-square widgets are checkboxes, not type-in fields. */
+export function isCheckboxSizedRect(rect: FormFieldRect): boolean {
+  const maxSide = Math.max(rect.width, rect.height);
+  const minSide = Math.min(rect.width, rect.height);
+  if (maxSide <= 0 || maxSide > 26) return false;
+  return minSide / maxSide >= 0.55;
+}
+
+function coerceCheckboxValue(value: string): string {
+  const v = value.trim().toLowerCase();
+  if (
+    v === 'true' ||
+    v === 'yes' ||
+    v === 'on' ||
+    v === '1' ||
+    v === 'x' ||
+    v === '✓' ||
+    v === '✔' ||
+    v === '☑' ||
+    v === '☒'
+  ) {
+    return 'true';
+  }
+  return 'false';
+}
+
+/**
+ * Fix mis-typed checkbox widgets (common AcroForm / Smart Fill mistake:
+ * a 14×14 square becomes a text box showing a truncated placeholder like "pre").
+ */
+export function normalizeFieldType(field: FormField): FormField {
+  if (field.type === 'checkbox' || field.type === 'radio') {
+    return field.placeholder ? { ...field, placeholder: '' } : field;
+  }
+
+  const nameHint = field.name
+    .replace(/^smartfill:/i, '')
+    .replace(/#[0-9]+$/i, '')
+    .replace(/:[a-f0-9-]+$/i, '')
+    .replace(/[_-]+/g, ' ')
+    .trim();
+
+  const looksLikeCheck =
+    field.type === 'text' &&
+    (isCheckboxSizedRect(field.rect) ||
+      (isCheckboxOptionLabel(nameHint) &&
+        field.rect.width <= 40 &&
+        field.rect.height <= 28));
+
+  if (looksLikeCheck) {
+    return {
+      ...field,
+      type: 'checkbox',
+      value: coerceCheckboxValue(field.value),
+      placeholder: '',
+    };
+  }
+
+  // Narrow leftovers shouldn't show truncated garbage placeholders ("pre…")
+  if (
+    field.type === 'text' &&
+    field.rect.width < 40 &&
+    field.placeholder &&
+    field.placeholder.length > 2
+  ) {
+    return { ...field, placeholder: '' };
+  }
+
+  return field;
+}
+
 /** True when two rects are the same control (overlap, same row, or tiny checkbox neighbors). */
 export function fieldsClash(a: FormFieldRect, b: FormFieldRect): boolean {
   const overlapW = Math.max(
@@ -197,9 +269,14 @@ export function dedupeFormFields(fields: FormField[]): FormField[] {
     return 3;
   };
 
-  const sorted = [...fields].sort((a, b) => {
+  const sorted = [...fields].map(normalizeFieldType).sort((a, b) => {
     const rd = rank(b) - rank(a);
     if (rd !== 0) return rd;
+    // Prefer checkboxes over text when both synthetic
+    const kindRank = (f: FormField) =>
+      f.type === 'checkbox' || f.type === 'radio' ? 2 : 0;
+    const kd = kindRank(b) - kindRank(a);
+    if (kd !== 0) return kd;
     return a.rect.width * a.rect.height - b.rect.width * b.rect.height;
   });
   const kept: FormField[] = [];
@@ -540,6 +617,10 @@ export function detectSmartFillSuggestions(
       width: Math.max(item.width, 80),
       height: Math.max(20, Math.min(24, item.height + 8)),
     };
+    // Tiny squares are checkboxes — never invent a type-in field on them
+    if (isCheckboxSizedRect({ x: itemX(item), y: itemYTop(item, pageHeight), width: item.width, height: item.height })) {
+      continue;
+    }
     if (suggestions.some((s) => fieldsClash(s.rect, rect))) continue;
 
     // Skip if non-blank text already sits on this blank (filled form)
@@ -564,25 +645,50 @@ export function detectSmartFillSuggestions(
     });
   }
 
-  // Deduplicate (IoU / same-row / nearby checkboxes)
-  const sorted = [...suggestions].sort((a, b) => b.confidence - a.confidence);
+  // Deduplicate — prefer checkboxes over text when they clash (avoids "pre" typing in boxes)
+  const suggestionPriority = (s: SmartFillSuggestion): number => {
+    const kindBoost =
+      s.kind === 'checkbox' || s.kind === 'radio'
+        ? 2
+        : s.kind === 'signature'
+          ? 1
+          : 0;
+    return kindBoost + s.confidence;
+  };
+  const sorted = [...suggestions].sort(
+    (a, b) => suggestionPriority(b) - suggestionPriority(a),
+  );
   const kept: SmartFillSuggestion[] = [];
   for (const s of sorted) {
     if (kept.some((k) => fieldsClash(k.rect, s.rect))) continue;
-    if (s.kind === 'text' || s.kind === 'date') {
-      s.rect = {
-        ...s.rect,
-        height: Math.min(s.rect.height, 24),
+    let next = s;
+    // Square text ghosts → real checkbox toggles
+    if (
+      (next.kind === 'text' || next.kind === 'date') &&
+      isCheckboxSizedRect(next.rect)
+    ) {
+      next = { ...next, kind: 'checkbox', label: next.label ?? 'Checkbox' };
+    }
+    if (next.kind === 'text' || next.kind === 'date') {
+      next = {
+        ...next,
+        rect: {
+          ...next.rect,
+          height: Math.min(next.rect.height, 24),
+        },
       };
     }
-    if (s.kind === 'checkbox') {
-      s.rect = {
-        ...s.rect,
-        width: 14,
-        height: 14,
+    if (next.kind === 'checkbox') {
+      next = {
+        ...next,
+        rect: {
+          ...next.rect,
+          width: Math.min(next.rect.width, 18),
+          height: Math.min(next.rect.height, 18),
+        },
       };
     }
-    kept.push({ ...s, confirmed: false });
+    kept.push({ ...next, confirmed: false });
   }
 
   return kept;
@@ -601,14 +707,17 @@ export function suggestionToFormField(
   else if (kind === 'radio') type = 'radio';
   else type = 'text';
 
-  return {
+  return normalizeFieldType({
     id: suggestion.id,
     name: `smartfill:${suggestion.label ?? suggestion.kind}:${suggestion.id.slice(0, 8)}`,
     type,
     pageIndex: suggestion.pageIndex,
     rect: { ...suggestion.rect },
     value: type === 'checkbox' ? 'false' : '',
-    placeholder: placeholderFromLabel(suggestion.label, type),
+    placeholder:
+      type === 'checkbox'
+        ? ''
+        : placeholderFromLabel(suggestion.label, type),
     synthetic: true,
-  };
+  });
 }

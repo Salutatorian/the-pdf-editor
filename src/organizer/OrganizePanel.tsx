@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { ThumbnailItem } from '../viewer/ThumbnailSidebar.tsx';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -8,6 +9,7 @@ import {
   ArrowUp,
   Copy,
   FilePlus2,
+  GripVertical,
   RotateCw,
   Scissors,
   Trash2,
@@ -65,6 +67,40 @@ function moveDown(pageCount: number, selected: number[]): number[] | null {
   return order;
 }
 
+/** Move one page (or the selected block containing it) before `toIndex`. */
+export function orderAfterDrag(
+  pageCount: number,
+  fromIndex: number,
+  toIndex: number,
+  selectedPages: number[] = [],
+): number[] | null {
+  if (
+    fromIndex < 0 ||
+    toIndex < 0 ||
+    fromIndex >= pageCount ||
+    toIndex >= pageCount ||
+    fromIndex === toIndex
+  ) {
+    return null;
+  }
+
+  const order = Array.from({ length: pageCount }, (_, i) => i);
+  const moving =
+    selectedPages.includes(fromIndex) && selectedPages.length > 1
+      ? [...new Set(selectedPages)].sort((a, b) => a - b)
+      : [fromIndex];
+
+  if (moving.includes(toIndex)) return null;
+
+  // Drop on a page → insert before that page (take its place).
+  const before = order.filter((i) => !moving.includes(i) && i < toIndex);
+  const after = order.filter((i) => !moving.includes(i) && i >= toIndex);
+  const next = [...before, ...moving, ...after];
+  if (next.length !== pageCount) return null;
+  if (next.every((v, i) => v === i)) return null;
+  return next;
+}
+
 export function OrganizePanel({
   pageCount,
   currentPage,
@@ -82,13 +118,28 @@ export function OrganizePanel({
   const thumbMap = new Map(thumbnails.map((t) => [t.pageIndex, t.dataUrl]));
   const hasSelection = selectedPages.length > 0;
   const primary = selectedPages[0] ?? currentPage;
+  const [dragFrom, setDragFrom] = useState<number | null>(null);
+  const [dragOver, setDragOver] = useState<number | null>(null);
+
+  const applyDrop = (toIndex: number) => {
+    if (dragFrom === null) return;
+    const next = orderAfterDrag(
+      pageCount,
+      dragFrom,
+      toIndex,
+      selectedPages,
+    );
+    setDragFrom(null);
+    setDragOver(null);
+    if (next) onApplyReorder(next);
+  };
 
   return (
     <Frame className="flex h-full min-h-0 flex-col">
       <FramePanel className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <FrameHeader
           title="Organize pages"
-          description={`${pageCount} page${pageCount === 1 ? '' : 's'}`}
+          description={`${pageCount} page${pageCount === 1 ? '' : 's'} · drag tiles to reorder`}
           action={
             selectedPages.length > 0 ? (
               <Badge variant="secondary" className="text-[10px]">
@@ -181,17 +232,52 @@ export function OrganizePanel({
             {Array.from({ length: pageCount }, (_, i) => {
               const selected = selectedPages.includes(i);
               const dataUrl = thumbMap.get(i);
+              const isDragging = dragFrom === i;
+              const isOver = dragOver === i && dragFrom !== null && dragFrom !== i;
               return (
-                <li key={i}>
-                  <button
-                    type="button"
+                <li
+                  key={i}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    if (dragOver !== i) setDragOver(i);
+                  }}
+                  onDragLeave={() => {
+                    if (dragOver === i) setDragOver(null);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    applyDrop(i);
+                  }}
+                >
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    draggable
+                    aria-grabbed={isDragging}
+                    aria-label={`Page ${i + 1}. Drag to reorder.`}
                     className={cn(
-                      'group flex w-full flex-col gap-1 rounded-md border p-1.5 text-left transition-colors',
+                      'group flex w-full cursor-grab flex-col gap-1 rounded-md border p-1.5 text-left transition-colors active:cursor-grabbing',
                       selected
                         ? 'border-primary bg-primary/5'
                         : 'border-border/80 hover:border-border hover:bg-muted/40',
                       currentPage === i && 'ring-1 ring-primary/40',
+                      isDragging && 'opacity-45',
+                      isOver && 'border-primary border-dashed bg-primary/10 ring-2 ring-primary/30',
                     )}
+                    onDragStart={(e) => {
+                      setDragFrom(i);
+                      e.dataTransfer.effectAllowed = 'move';
+                      e.dataTransfer.setData('text/plain', String(i));
+                      // Select the dragged page if it wasn't in the selection
+                      if (!selectedPages.includes(i)) {
+                        onSelectPages([i]);
+                      }
+                    }}
+                    onDragEnd={() => {
+                      setDragFrom(null);
+                      setDragOver(null);
+                    }}
                     onClick={(e) => {
                       if (e.shiftKey || e.metaKey || e.ctrlKey) {
                         onSelectPages(togglePage(selectedPages, i));
@@ -200,8 +286,19 @@ export function OrganizePanel({
                         onJump(i);
                       }
                     }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onSelectPages([i]);
+                        onJump(i);
+                      }
+                    }}
                   >
                     <div className="flex items-center gap-1.5 px-0.5">
+                      <GripVertical
+                        className="size-3.5 shrink-0 text-muted-foreground/70"
+                        aria-hidden
+                      />
                       <input
                         type="checkbox"
                         checked={selected}
@@ -216,12 +313,13 @@ export function OrganizePanel({
                         {i + 1}
                       </span>
                     </div>
-                    <div className="aspect-[3/4] w-full overflow-hidden rounded bg-muted/50">
+                    <div className="pointer-events-none aspect-[3/4] w-full overflow-hidden rounded bg-muted/50">
                       {dataUrl ? (
                         <img
                           src={dataUrl}
                           alt={`Page ${i + 1}`}
                           className="h-full w-full object-contain"
+                          draggable={false}
                         />
                       ) : (
                         <div className="flex h-full items-center justify-center text-[10px] text-muted-foreground">
@@ -229,7 +327,7 @@ export function OrganizePanel({
                         </div>
                       )}
                     </div>
-                  </button>
+                  </div>
                 </li>
               );
             })}

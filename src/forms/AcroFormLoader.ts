@@ -1,6 +1,7 @@
 import { PDFDocument, PDFName, PDFRef } from 'pdf-lib';
 import { v4 as uuidv4 } from 'uuid';
 import type { FormField, FormFieldType } from '../document/types.ts';
+import { normalizeFieldType } from './SmartFill.ts';
 
 function lowerName(name: string): string {
   return name.toLowerCase();
@@ -207,5 +208,5 @@ export async function loadAcroFormFields(
     });
   }
 
-  return results;
+  return results.map(normalizeFieldType);
 }

@@ -161,8 +161,16 @@ export function FormOverlay({
             };
 
             const hint = fieldHint(field);
+            const asCheckbox =
+              field.type === 'checkbox' ||
+              (field.type === 'text' &&
+                field.rect.width <= 26 &&
+                field.rect.height <= 26 &&
+                Math.min(field.rect.width, field.rect.height) /
+                  Math.max(field.rect.width, field.rect.height) >=
+                  0.55);
 
-            if (field.type === 'checkbox') {
+            if (asCheckbox) {
               // Follow printed box size exactly through zoom — no fixed 14–18 cap
               const boxW = Math.max(8, field.rect.width * scale);
               const boxH = Math.max(8, field.rect.height * scale);
@@ -195,7 +203,7 @@ export function FormOverlay({
                   onKeyDown={(e) => handleTab(e, field.id)}
                   onFocus={() => onFocusedFieldChange?.(field.id)}
                 >
-                  {checked ? '✓' : ''}
+                  {checked ? 'X' : ''}
                 </button>
               );
             }
@@ -285,18 +293,46 @@ export function FormOverlay({
               );
             }
 
-            if (field.type === 'date') {
+            if (field.type === 'date' || field.type === 'text') {
+              // Always textarea: wrap inside the box (never spill sideways like Stirling).
+              // Overflow clips to the printed field — only what fits is visible.
+              const tall = field.rect.height >= 36;
               return (
-                <input
+                <textarea
                   key={field.id}
-                  ref={setRef as (el: HTMLInputElement | null) => void}
-                  className="form-overlay__field form-overlay__field--date"
-                  type="date"
-                  style={style}
+                  ref={setRef as (el: HTMLTextAreaElement | null) => void}
+                  className={
+                    tall
+                      ? 'form-overlay__field form-overlay__field--text form-overlay__field--multiline'
+                      : 'form-overlay__field form-overlay__field--text form-overlay__field--wrap'
+                  }
+                  style={{
+                    ...style,
+                    fontSize: Math.max(
+                      9,
+                      Math.min(
+                        tall ? 13 : 14,
+                        tall
+                          ? 12 * Math.min(scale, 1.25)
+                          : field.rect.height * scale * 0.72,
+                      ),
+                    ),
+                  }}
                   value={field.value}
                   disabled={field.readOnly}
-                  aria-label={hint}
-                  title={hint}
+                  aria-label={
+                    field.type === 'date' ? hint || 'Date' : hint
+                  }
+                  title={
+                    field.type === 'date'
+                      ? 'Type any date format (e.g. 31/12/2026 or Dec 31, 2026)'
+                      : hint
+                  }
+                  placeholder={
+                    field.type === 'date' ? hint || 'Date' : hint
+                  }
+                  rows={1}
+                  wrap="soft"
                   onChange={(e) => onFieldChange(field.id, e.target.value)}
                   onKeyDown={(e) => handleTab(e, field.id)}
                   onFocus={() => onFocusedFieldChange?.(field.id)}
@@ -304,22 +340,7 @@ export function FormOverlay({
               );
             }
 
-            return (
-              <input
-                key={field.id}
-                ref={setRef as (el: HTMLInputElement | null) => void}
-                className="form-overlay__field form-overlay__field--text"
-                type="text"
-                style={style}
-                value={field.value}
-                disabled={field.readOnly}
-                aria-label={hint}
-                placeholder={hint}
-                onChange={(e) => onFieldChange(field.id, e.target.value)}
-                onKeyDown={(e) => handleTab(e, field.id)}
-                onFocus={() => onFocusedFieldChange?.(field.id)}
-              />
-            );
+            return null;
           })
         : null}
 
@@ -382,7 +403,7 @@ export function FormOverlay({
                 window.setTimeout(() => onFieldChange(s.id, 'true'), 0);
               }}
             >
-              {checked ? '✓' : ''}
+              {checked ? 'X' : ''}
             </button>
           );
         }
