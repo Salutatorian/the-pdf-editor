@@ -72,9 +72,11 @@ jobs:
             Your PDFs stay on your computer. Nothing is uploaded or stored elsewhere.
 
             ### Installers
-            - **Windows:** `.exe` (NSIS)
-            - **macOS:** Apple Silicon + Intel builds
-            - **Linux:** AppImage / deb
+            - **Windows:** `pdf_editor_…_x64-setup.exe`
+            - **macOS:** Apple Silicon + Intel `.dmg`
+            - **Linux:** `.AppImage`
+
+            (Plus small `.sig` / `latest.json` files for in-app updates — ignore those for manual install.)
 
             In-app updates: after installing this build, future versions install from the Update toast without a manual redownload.
 
