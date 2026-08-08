@@ -85,3 +85,55 @@ jobs:
           prerelease: false
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
+
+  # The matrix jobs above each upload their own latest.json and race each
+  # other (last writer wins), leaving most platforms out of the updater
+  # manifest. Rebuild a merged latest.json once ALL platforms are done.
+  fixup-latest-json:
+    needs: publish-tauri
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rebuild and upload merged latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p assets && cd assets
+          gh release download "$TAG" --pattern '*.sig' --pattern 'latest.json' --clobber
+          python3 - "$TAG" <<'PYEOF'
+          import glob, json, os, sys
+
+          tag = sys.argv[1]
+          version = tag.lstrip('v')
+          base = f'https://github.com/Salutatorian/the-pdf-editor/releases/download/{tag}'
+
+          with open('latest.json') as f:
+              d = json.load(f)
+          d['platforms'] = {}
+
+          def sig(path):
+              with open(path) as f:
+                  return f.read().strip()
+
+          for path in sorted(glob.glob('*.sig')):
+              name = path[:-4]  # strip .sig
+              s = sig(path)
+              if name.endswith('_x64-setup.exe'):
+                  keys = ['windows-x86_64', 'windows-x86_64-nsis']
+              elif name.endswith('_amd64.AppImage'):
+                  keys = ['linux-x86_64', 'linux-x86_64-appimage']
+              elif name.endswith('_aarch64.dmg') or name.endswith('_aarch64.app.tar.gz'):
+                  keys = ['darwin-aarch64']
+              elif name.endswith('_x64.dmg') or name.endswith('_x64.app.tar.gz'):
+                  keys = ['darwin-x86_64']
+              else:
+                  continue
+              for k in keys:
+                  d['platforms'][k] = {'signature': s, 'url': f'{base}/{name}'}
+
+          with open('latest.json', 'w') as f:
+              json.dump(d, f, indent=2)
+          print('platforms:', sorted(d['platforms'].keys()))
+          PYEOF
+          gh release upload "$TAG" latest.json --clobber
