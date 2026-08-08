@@ -18,6 +18,37 @@ export type ChangelogRelease = {
  */
 export const CHANGELOG: readonly ChangelogRelease[] = [
   {
+    version: '1.4.1',
+    title: 'Printing fix · text formatting · black theme',
+    date: '2026-08-08',
+    items: [
+      {
+        kind: 'fixed',
+        text: 'Printing — pages fit the paper, no more clipped or partial printouts',
+      },
+      {
+        kind: 'added',
+        text: 'Bold / italic / underline and font choices for the Add Text tool',
+      },
+      {
+        kind: 'added',
+        text: 'True-black (OLED) theme, plus "Dark pages" to invert the paper in dark themes',
+      },
+      {
+        kind: 'fixed',
+        text: 'In-app auto-update installs and relaunches on its own — no more trip to the downloads website',
+      },
+      {
+        kind: 'improved',
+        text: 'Saved PDFs keep your text formatting and font choices',
+      },
+      {
+        kind: 'improved',
+        text: 'Scans and image-heavy PDFs render via built-in JBIG2 / JPEG2000 decoders',
+      },
+    ],
+  },
+  {
     version: '1.3.1',
     title: 'Slimmer installers · signature & organize fixes',
     date: '2026-08-08',

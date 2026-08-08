@@ -1,5 +1,5 @@
 /** Keep in sync with package.json / tauri.conf.json version. */
-export const APP_VERSION = '1.4.0';
+export const APP_VERSION = '1.4.1';
 
 export const APP_NAME = 'pdf_editor';
 

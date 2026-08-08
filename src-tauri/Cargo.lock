@@ -2321,7 +2321,7 @@ dependencies = [
 
 [[package]]
 name = "pdf_editor"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "log",
  "serde",
