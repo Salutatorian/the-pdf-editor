@@ -278,7 +278,7 @@ export function SignaturePadDialog({
                 signature library&quot; on.
               </p>
             ) : (
-              <ul className="grid max-h-56 grid-cols-2 gap-2 overflow-y-auto">
+              <ul className="grid max-h-56 grid-cols-2 gap-2 overflow-y-auto p-1.5">
                 {library.map((sig) => (
                   <li key={sig.id} className="relative">
                     <button
