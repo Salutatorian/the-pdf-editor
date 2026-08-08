@@ -280,7 +280,7 @@ export function SignaturePadDialog({
             ) : (
               <ul className="grid max-h-56 grid-cols-2 gap-2 overflow-y-auto">
                 {library.map((sig) => (
-                  <li key={sig.id}>
+                  <li key={sig.id} className="relative">
                     <button
                       type="button"
                       className={
@@ -304,19 +304,19 @@ export function SignaturePadDialog({
                         {sig.name}
                       </span>
                     </button>
-                    <Button
+                    <button
                       type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="mt-0.5 h-6 w-full text-[10px] text-muted-foreground"
+                      aria-label={`Remove ${sig.name}`}
+                      title="Remove"
+                      className="absolute -top-1.5 -right-1.5 flex size-[18px] items-center justify-center rounded bg-[#dc2626] p-0 text-[12px] font-bold leading-none text-white shadow-sm hover:bg-[#b91c1c]"
                       onClick={() => {
                         deleteSignature(sig.id);
                         if (pickedId === sig.id) setPickedId(null);
                         refreshLibrary();
                       }}
                     >
-                      Remove
-                    </Button>
+                      ×
+                    </button>
                   </li>
                 ))}
               </ul>
