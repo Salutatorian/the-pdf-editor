@@ -259,22 +259,9 @@ export function FormOverlay({
 
             if (field.type === 'signature') {
               const signed = field.value.startsWith('data:image/');
-              // Ink lives on the Konva overlay (draggable). Don't paint a second
-              // opaque image here or steal pointer events over the date/text.
-              if (signed) {
-                return (
-                  <button
-                    key={field.id}
-                    ref={setRef as (el: HTMLButtonElement | null) => void}
-                    type="button"
-                    className="form-overlay__field form-overlay__field--signature form-overlay__field--signature-ink"
-                    style={{ ...style, pointerEvents: 'none' }}
-                    aria-hidden
-                    tabIndex={-1}
-                    disabled
-                  />
-                );
-              }
+              // Ink lives on the Konva overlay (draggable). Once signed, render
+              // NOTHING here — leaving a label box would desync from the ink.
+              if (signed) return null;
               return (
                 <button
                   key={field.id}

@@ -5,8 +5,6 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Frame, FrameHeader, FramePanel } from '@/components/frame';
 import {
-  ArrowDown,
-  ArrowUp,
   Copy,
   FilePlus2,
   GripVertical,
@@ -35,36 +33,6 @@ function togglePage(selected: number[], page: number): number[] {
   return selected.includes(page)
     ? selected.filter((p) => p !== page)
     : [...selected, page].sort((a, b) => a - b);
-}
-
-function moveUp(pageCount: number, selected: number[]): number[] | null {
-  const order = Array.from({ length: pageCount }, (_, i) => i);
-  const sel = [...new Set(selected)].sort((a, b) => a - b);
-  if (sel.length === 0 || sel[0] === 0) return null;
-  for (const i of sel) {
-    const pos = order.indexOf(i);
-    if (pos <= 0) continue;
-    const prev = order[pos - 1]!;
-    if (sel.includes(prev)) continue;
-    order[pos - 1] = i;
-    order[pos] = prev;
-  }
-  return order;
-}
-
-function moveDown(pageCount: number, selected: number[]): number[] | null {
-  const order = Array.from({ length: pageCount }, (_, i) => i);
-  const sel = [...new Set(selected)].sort((a, b) => b - a);
-  if (sel.length === 0 || sel[0] === pageCount - 1) return null;
-  for (const i of sel) {
-    const pos = order.indexOf(i);
-    if (pos < 0 || pos >= order.length - 1) continue;
-    const next = order[pos + 1]!;
-    if (sel.includes(next)) continue;
-    order[pos + 1] = i;
-    order[pos] = next;
-  }
-  return order;
 }
 
 /** Move one page (or the selected block containing it) before `toIndex`. */
@@ -99,6 +67,86 @@ export function orderAfterDrag(
   if (next.length !== pageCount) return null;
   if (next.every((v, i) => v === i)) return null;
   return next;
+}
+
+function OrganizeActions({
+  hasSelection,
+  selectedPages,
+  onRotate,
+  onDuplicate,
+  onDelete,
+  onExtract,
+  onMergeRequest,
+  primary,
+}: {
+  hasSelection: boolean;
+  selectedPages: number[];
+  primary: number;
+  onRotate: OrganizePanelProps['onRotate'];
+  onDuplicate: OrganizePanelProps['onDuplicate'];
+  onDelete: OrganizePanelProps['onDelete'];
+  onExtract: OrganizePanelProps['onExtract'];
+  onMergeRequest: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1 border-b border-border/70 px-3 py-2">
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-7 text-[11px]"
+        disabled={!hasSelection}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={(e) => {
+          onRotate(selectedPages, 90);
+          // Keep the button focused so clicking/Enter can spam-rotate.
+          e.currentTarget.blur();
+          e.currentTarget.focus();
+        }}
+      >
+        <RotateCw className="size-3.5" />
+        Rotate 90°
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-7 text-[11px]"
+        disabled={!hasSelection}
+        onClick={() => onDuplicate(primary)}
+      >
+        <Copy className="size-3.5" />
+        Duplicate
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-7 text-[11px]"
+        disabled={!hasSelection}
+        onClick={() => onDelete(selectedPages)}
+      >
+        <Trash2 className="size-3.5" />
+        Delete
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-7 text-[11px]"
+        disabled={!hasSelection}
+        onClick={() => onExtract(selectedPages)}
+      >
+        <Scissors className="size-3.5" />
+        Extract
+      </Button>
+      <Button
+        variant="secondary"
+        size="sm"
+        className="h-7 text-[11px]"
+        onClick={onMergeRequest}
+      >
+        <FilePlus2 className="size-3.5" />
+        Merge PDF…
+      </Button>
+    </div>
+  );
 }
 
 export function OrganizePanel({
@@ -149,83 +197,16 @@ export function OrganizePanel({
           }
         />
 
-        <div className="flex flex-wrap gap-1 border-b border-border/70 px-3 py-2">
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 text-[11px]"
-            disabled={!hasSelection}
-            onClick={() => {
-              const next = moveUp(pageCount, selectedPages);
-              if (next) onApplyReorder(next);
-            }}
-          >
-            <ArrowUp className="size-3.5" />
-            Up
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 text-[11px]"
-            disabled={!hasSelection}
-            onClick={() => {
-              const next = moveDown(pageCount, selectedPages);
-              if (next) onApplyReorder(next);
-            }}
-          >
-            <ArrowDown className="size-3.5" />
-            Down
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 text-[11px]"
-            disabled={!hasSelection}
-            onClick={() => onRotate(selectedPages, 90)}
-          >
-            <RotateCw className="size-3.5" />
-            Rotate 90°
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 text-[11px]"
-            disabled={!hasSelection}
-            onClick={() => onDuplicate(primary)}
-          >
-            <Copy className="size-3.5" />
-            Duplicate
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 text-[11px]"
-            disabled={!hasSelection}
-            onClick={() => onDelete(selectedPages)}
-          >
-            <Trash2 className="size-3.5" />
-            Delete
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 text-[11px]"
-            disabled={!hasSelection}
-            onClick={() => onExtract(selectedPages)}
-          >
-            <Scissors className="size-3.5" />
-            Extract
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            className="h-7 text-[11px]"
-            onClick={onMergeRequest}
-          >
-            <FilePlus2 className="size-3.5" />
-            Merge PDF…
-          </Button>
-        </div>
+        <OrganizeActions
+          hasSelection={hasSelection}
+          selectedPages={selectedPages}
+          primary={primary}
+          onRotate={onRotate}
+          onDuplicate={onDuplicate}
+          onDelete={onDelete}
+          onExtract={onExtract}
+          onMergeRequest={onMergeRequest}
+        />
 
         <ScrollArea className="min-h-0 flex-1">
           <ul className="grid grid-cols-2 gap-2 p-3 sm:grid-cols-3 md:grid-cols-4">
@@ -237,8 +218,22 @@ export function OrganizePanel({
               return (
                 <li
                   key={i}
+                  draggable
+                  onDragStart={(e) => {
+                    setDragFrom(i);
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', String(i));
+                    if (!selectedPages.includes(i)) {
+                      onSelectPages([i]);
+                    }
+                  }}
+                  onDragEnd={() => {
+                    setDragFrom(null);
+                    setDragOver(null);
+                  }}
                   onDragOver={(e) => {
                     e.preventDefault();
+                    e.stopPropagation();
                     e.dataTransfer.dropEffect = 'move';
                     if (dragOver !== i) setDragOver(i);
                   }}
@@ -247,13 +242,13 @@ export function OrganizePanel({
                   }}
                   onDrop={(e) => {
                     e.preventDefault();
+                    e.stopPropagation();
                     applyDrop(i);
                   }}
                 >
                   <div
                     role="button"
                     tabIndex={0}
-                    draggable
                     aria-grabbed={isDragging}
                     aria-label={`Page ${i + 1}. Drag to reorder.`}
                     className={cn(
@@ -265,19 +260,6 @@ export function OrganizePanel({
                       isDragging && 'opacity-45',
                       isOver && 'border-primary border-dashed bg-primary/10 ring-2 ring-primary/30',
                     )}
-                    onDragStart={(e) => {
-                      setDragFrom(i);
-                      e.dataTransfer.effectAllowed = 'move';
-                      e.dataTransfer.setData('text/plain', String(i));
-                      // Select the dragged page if it wasn't in the selection
-                      if (!selectedPages.includes(i)) {
-                        onSelectPages([i]);
-                      }
-                    }}
-                    onDragEnd={() => {
-                      setDragFrom(null);
-                      setDragOver(null);
-                    }}
                     onClick={(e) => {
                       if (e.shiftKey || e.metaKey || e.ctrlKey) {
                         onSelectPages(togglePage(selectedPages, i));

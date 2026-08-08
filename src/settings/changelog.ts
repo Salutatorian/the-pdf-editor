@@ -19,12 +19,32 @@ export type ChangelogRelease = {
 export const CHANGELOG: readonly ChangelogRelease[] = [
   {
     version: '1.3.1',
-    title: 'Slimmer installers',
-    date: '2026-08-07',
+    title: 'Slimmer installers · signature & organize fixes',
+    date: '2026-08-08',
     items: [
       {
         kind: 'improved',
         text: 'Release downloads trimmed to Windows .exe, macOS .dmg, and Linux AppImage',
+      },
+      {
+        kind: 'fixed',
+        text: 'Signature ink and its frame now move together (no more desync)',
+      },
+      {
+        kind: 'added',
+        text: 'Red × on a selected signature/image to remove it',
+      },
+      {
+        kind: 'fixed',
+        text: 'Draw pad always starts blank — no blank/ghost signatures on a new file',
+      },
+      {
+        kind: 'improved',
+        text: 'Organize: drag page tiles to reorder (removed Up/Down), Rotate is repeatable',
+      },
+      {
+        kind: 'improved',
+        text: 'Uninstalling from Windows wipes all saved signatures, settings, and caches',
       },
     ],
   },

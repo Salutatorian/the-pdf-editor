@@ -97,6 +97,8 @@ export function SignaturePadDialog({
 
     const pad = bindSignaturePad(canvasEl);
     padRef.current = pad;
+    // Always start blank — never reuse ink from a previous open/file.
+    pad.clear();
     setDrawEmpty(true);
 
     const onBegin = () => setDrawEmpty(false);

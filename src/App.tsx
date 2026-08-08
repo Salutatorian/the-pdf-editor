@@ -1867,6 +1867,7 @@ function AppInner() {
                   }
                   onReplaceImage={(id) => void replaceOverlayImage(id)}
                   onToolConsumed={() => setAddTool('select')}
+                  onDeleteOverlay={(id) => store.deleteOverlays([id])}
                 />
                 <FormOverlay
                   pageIndex={pageIndex}

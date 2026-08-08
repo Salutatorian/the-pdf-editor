@@ -39,6 +39,8 @@ export type OverlayEditorProps = {
   onReplaceImage?: (overlayId: string) => void;
   /** Called after a place tool finishes so the UI can return to Select */
   onToolConsumed?: () => void;
+  /** Delete a placed overlay (signature/image) */
+  onDeleteOverlay?: (id: string) => void;
 };
 
 function useHtmlImage(url: string | undefined): HTMLImageElement | null {
@@ -236,12 +238,48 @@ function OverlayNode({
       );
     }
     case 'image':
-    case 'signature':
-      return img ? (
-        <KonvaImage {...common} image={img} />
-      ) : (
-        <Rect {...common} fill="#e8eaed" stroke="#9aa3ad" dash={[4, 4]} />
+    case 'signature': {
+      const w = overlay.width * scale;
+      const h = overlay.height * scale;
+      // Single draggable group so the ink and its frame never desync.
+      return (
+        <Group
+          id={overlay.id}
+          x={overlay.x * scale}
+          y={overlay.y * scale}
+          width={w}
+          height={h}
+          rotation={overlay.rotation}
+          draggable={draggable}
+          opacity={overlay.opacity ?? 1}
+          onClick={onSelect}
+          onTap={onSelect}
+          onDblClick={onDblClick}
+          onDblTap={onDblClick}
+          onDragMove={onDragMove}
+          onDragEnd={onDragEnd}
+          onTransformEnd={onTransformEnd}
+          ref={(node) => {
+            if (node) nodeRefs.set(overlay.id, node);
+            else nodeRefs.delete(overlay.id);
+          }}
+        >
+          {img ? (
+            <KonvaImage x={0} y={0} width={w} height={h} image={img} />
+          ) : (
+            <Rect
+              x={0}
+              y={0}
+              width={w}
+              height={h}
+              fill="#e8eaed"
+              stroke="#9aa3ad"
+              dash={[4, 4]}
+            />
+          )}
+        </Group>
       );
+    }
     default: {
       const _exhaustive: never = overlay.kind;
       return _exhaustive;
@@ -311,6 +349,7 @@ export function OverlayEditor({
   onRequestImage,
   onReplaceImage,
   onToolConsumed,
+  onDeleteOverlay,
 }: OverlayEditorProps) {
   const stageRef = useRef<Konva.Stage>(null);
   const trRef = useRef<Konva.Transformer>(null);
@@ -672,6 +711,52 @@ export function OverlayEditor({
         ) : null}
       </Layer>
     </Stage>
+    {interactive && selectedIds.length === 1 && onDeleteOverlay
+      ? (() => {
+          const sel = pageOverlays.find((o) => o.id === selectedIds[0]);
+          if (
+            !sel ||
+            (sel.kind !== 'signature' && sel.kind !== 'image') ||
+            sel.id === editingId
+          ) {
+            return null;
+          }
+          return (
+            <button
+              type="button"
+              aria-label="Remove signature"
+              title="Remove"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDeleteOverlay(sel.id);
+              }}
+              style={{
+                position: 'absolute',
+                left: sel.x * scale + sel.width * scale - 9,
+                top: sel.y * scale - 9,
+                width: 18,
+                height: 18,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 0,
+                border: 'none',
+                borderRadius: 4,
+                background: '#dc2626',
+                color: '#ffffff',
+                fontSize: 12,
+                fontWeight: 700,
+                lineHeight: 1,
+                cursor: 'pointer',
+                zIndex: 20,
+                boxShadow: '0 1px 2px rgba(0,0,0,0.4)',
+              }}
+            >
+              ×
+            </button>
+          );
+        })()
+      : null}
     {editingOverlay ? (
       <textarea
         ref={editRef}
