@@ -56,6 +56,7 @@ export function PageCanvas({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [cssSize, setCssSize] = useState({ width: 0, height: 0 });
   const [textSpans, setTextSpans] = useState<TextSpanLayout[]>([]);
+  const [isScan, setIsScan] = useState(false);
   const renderGen = useRef(0);
 
   useEffect(() => {
@@ -79,7 +80,10 @@ export function PageCanvas({
 
     async function render(): Promise<void> {
       try {
-        const handle = renderPageToCanvas(page, canvas!, scale, totalRotation);
+        // Pass the USER rotation only — renderPageToCanvas adds the page's
+        // own /Rotate itself. Passing totalRotation here double-rotates
+        // scanned docs that carry rotation metadata.
+        const handle = renderPageToCanvas(page, canvas!, scale, rotation);
         cancelRender = handle.cancel;
         const size = await handle.promise;
         if (cancelled || gen !== renderGen.current) return;
@@ -87,6 +91,7 @@ export function PageCanvas({
           width: Math.floor(size.width),
           height: Math.floor(size.height),
         });
+        setIsScan(looksLikeScannedPhoto(canvas!));
         onRendered?.(size);
 
         const { items, styles } = await getPageTextContent(page);
@@ -143,6 +148,7 @@ export function PageCanvas({
     <div
       className={`page-canvas ${className}`.trim()}
       data-page-index={pageIndex}
+      data-scan={isScan ? 'true' : 'false'}
       style={style}
     >
       <canvas ref={canvasRef} className="page-canvas__pdf" />
@@ -172,6 +178,35 @@ export function PageCanvas({
       <div className="page-canvas__overlay">{children}</div>
     </div>
   );
+}
+
+/**
+ * Photo/scan detection for the "Dark pages" preference. Text PDFs render as
+ * near-white paper + near-black ink with almost no midtones; phone scans and
+ * photos are full of midtone gradients. Inverting a photo produces an
+ * unreadable negative, so scanned pages keep their true colors.
+ */
+function looksLikeScannedPhoto(canvas: HTMLCanvasElement): boolean {
+  const w = 32;
+  const h = 32;
+  const sample = document.createElement('canvas');
+  sample.width = w;
+  sample.height = h;
+  const sctx = sample.getContext('2d', { willReadFrequently: true });
+  if (!sctx) return false;
+  sctx.drawImage(canvas, 0, 0, w, h);
+  const data = sctx.getImageData(0, 0, w, h).data;
+  let midtones = 0;
+  const total = w * h;
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i]!;
+    const g = data[i + 1]!;
+    const b = data[i + 2]!;
+    const nearWhite = r > 245 && g > 245 && b > 245;
+    const nearBlack = r < 45 && g < 45 && b < 45;
+    if (!nearWhite && !nearBlack) midtones++;
+  }
+  return midtones / total > 0.12;
 }
 
 function pdfjsTransformToCss(

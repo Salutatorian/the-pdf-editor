@@ -24,7 +24,10 @@ export async function loadPdfDocument(
 ): Promise<PDFDocumentProxy> {
   // pdf.js mutates the buffer in some paths — copy defensively
   const data = bytes.slice();
-  const loadingTask = pdfjs.getDocument({ data, useSystemFonts: true });
+  // Serve the JBig2/OpenJPEG wasm decoders (public/wasm) so scanned PDFs
+  // render their images instead of skipping XObjects.
+  const wasmUrl = new URL('wasm/', document.baseURI).href;
+  const loadingTask = pdfjs.getDocument({ data, useSystemFonts: true, wasmUrl });
   return loadingTask.promise;
 }
 

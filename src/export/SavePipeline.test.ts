@@ -203,6 +203,36 @@ describe('saveAs', () => {
 });
 
 describe('buildPdfWithEdits form persistence', () => {
+  it('bakes text styling (bold serif + underline) into saved ink', async () => {
+    const { buildPdfWithEdits } = await import('./SavePipeline.ts');
+    const original = await makeMinimalPdf();
+    const overlays: OverlayObject[] = [
+      {
+        id: 'o2',
+        pageIndex: 0,
+        kind: 'text',
+        x: 72,
+        y: 120,
+        width: 200,
+        height: 24,
+        rotation: 0,
+        zIndex: 1,
+        text: 'Styled Ink',
+        fontSize: 14,
+        fontFamily: '"Times New Roman", Times, serif',
+        bold: true,
+        italic: false,
+        underline: true,
+        color: '#000000',
+      },
+    ];
+    const out = await buildPdfWithEdits(original, overlays, []);
+    expect(await extractPageText(out)).toContain('Styled Ink');
+    // A Times-Bold font (not plain Helvetica) must be embedded
+    const raw = Buffer.from(out).toString('latin1');
+    expect(raw).toContain('Times-Bold');
+  });
+
   it('bakes typed AcroForm text into the PDF so other viewers can see it', async () => {
     const { buildPdfWithEdits } = await import('./SavePipeline.ts');
     const src = await PDFDocument.create();

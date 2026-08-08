@@ -1,12 +1,14 @@
 const STORAGE_KEY = 'pdf_editor.settings.v1';
 
-export type ThemePreference = 'light' | 'dark';
+export type ThemePreference = 'light' | 'dark' | 'black';
 
 export type AppSettings = {
   /** Preference only — OS login item is applied via Tauri autostart. Default off. */
   openAtLogin: boolean;
   /** UI theme. Default light. */
   theme: ThemePreference;
+  /** Invert page ink in dark/black themes so the paper goes dark too. Default off (paper stays white). */
+  darkPaper: boolean;
   /** Last app version that finished a launch (used to detect upgrades). */
   lastLaunchedVersion: string | null;
   /** Changelog version the user already dismissed with Continue. */
@@ -18,6 +20,7 @@ export type AppSettings = {
 const DEFAULTS: AppSettings = {
   openAtLogin: false,
   theme: 'light',
+  darkPaper: false,
   lastLaunchedVersion: null,
   lastSeenChangelogVersion: null,
   dismissedUpdateVersion: null,
@@ -35,7 +38,11 @@ export function loadAppSettings(): AppSettings {
     const parsed = JSON.parse(raw) as Partial<AppSettings>;
     return {
       openAtLogin: Boolean(parsed.openAtLogin),
-      theme: parsed.theme === 'dark' ? 'dark' : 'light',
+      theme:
+        parsed.theme === 'dark' || parsed.theme === 'black'
+          ? parsed.theme
+          : 'light',
+      darkPaper: Boolean(parsed.darkPaper),
       lastLaunchedVersion:
         typeof parsed.lastLaunchedVersion === 'string'
           ? parsed.lastLaunchedVersion

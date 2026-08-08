@@ -34,6 +34,9 @@ export type OverlayObject = {
   fontSize?: number;
   color?: string;
   fontFamily?: string;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
   /** Kind-specific: image / signature raster */
   imageDataUrl?: string;
   /** Kind-specific: freehand draw */

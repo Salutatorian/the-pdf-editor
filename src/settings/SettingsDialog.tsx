@@ -1,14 +1,12 @@
 import { useEffect, useState } from 'react';
 import {
   Settings,
-  Minus,
-  X,
   Power,
   RefreshCw,
   ScrollText,
-  Monitor,
   Sun,
   Moon,
+  MoonStar,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -40,8 +38,8 @@ import {
   openUpdateDownload,
   type UpdateInfo,
 } from './updateService.ts';
-import { closeAppWindow, minimizeAppWindow } from './windowActions.ts';
 import type { ThemeMode } from './theme.ts';
+import { setDarkPaper } from './theme.ts';
 
 export type SettingsDialogProps = {
   open: boolean;
@@ -127,6 +125,9 @@ export function SettingsDialog({
 }: SettingsDialogProps) {
   const [, setSettings] = useState<AppSettings>(() => loadAppSettings());
   const [openAtLogin, setOpenAtLogin] = useState(false);
+  const [darkPaper, setDarkPaperState] = useState(
+    () => loadAppSettings().darkPaper,
+  );
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
@@ -222,49 +223,12 @@ export function SettingsDialog({
             <>
               <section className="space-y-2">
                 <h3 className="flex items-center gap-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-                  <Monitor className="size-3" />
-                  Window
-                </h3>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5"
-                    disabled={!desktop || busy}
-                    onClick={() => void minimizeAppWindow()}
-                  >
-                    <Minus className="size-3.5" />
-                    Minimize
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5"
-                    disabled={!desktop || busy}
-                    onClick={() => void closeAppWindow()}
-                  >
-                    <X className="size-3.5" />
-                    Close
-                  </Button>
-                </div>
-                {!desktop ? (
-                  <p className="text-xs text-muted-foreground">
-                    Window controls work in the desktop app on Windows and
-                    macOS.
-                  </p>
-                ) : null}
-              </section>
-
-              <Separator />
-
-              <section className="space-y-2">
-                <h3 className="flex items-center gap-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-                  {theme === 'dark' ? (
+                  {theme === 'light' ? (
+                    <Sun className="size-3" />
+                  ) : theme === 'dark' ? (
                     <Moon className="size-3" />
                   ) : (
-                    <Sun className="size-3" />
+                    <MoonStar className="size-3" />
                   )}
                   Appearance
                 </h3>
@@ -289,7 +253,27 @@ export function SettingsDialog({
                     <Moon className="size-3.5" />
                     Dark
                   </Button>
+                  <Button
+                    type="button"
+                    variant={theme === 'black' ? 'secondary' : 'outline'}
+                    size="sm"
+                    className="gap-1.5"
+                    onClick={() => onThemeChange('black')}
+                  >
+                    <MoonStar className="size-3.5" />
+                    Black
+                  </Button>
                 </div>
+                <ToggleRow
+                  label="Dark pages"
+                  description="Invert the page too — paper goes dark and ink goes light in Dark/Black themes. Off keeps paper white."
+                  checked={darkPaper}
+                  disabled={busy}
+                  onChange={(v) => {
+                    setDarkPaper(v);
+                    setDarkPaperState(v);
+                  }}
+                />
               </section>
 
               <Separator />

@@ -80,14 +80,14 @@ export function AppShell({
 
   return (
     <div
-      className="flex h-full min-h-0 flex-col bg-background"
+      className="flex h-full min-h-0 flex-col bg-background print:block print:h-auto"
       onDragEnter={onDragEnter}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
       {toolbar ? (
-        <header className="relative z-40 shrink-0 overflow-visible border-b border-border bg-card/60 backdrop-blur-sm">
+        <header className="relative z-40 shrink-0 overflow-visible border-b border-border bg-card/60 backdrop-blur-sm print:hidden">
           {toolbar}
         </header>
       ) : null}
@@ -102,11 +102,12 @@ export function AppShell({
               : propertiesCollapsed
                 ? 'grid-cols-[var(--sidebar-w)_minmax(0,1fr)]'
                 : 'grid-cols-[var(--sidebar-w)_minmax(0,1fr)_var(--props-w)]',
+          'print:block',
         )}
       >
         {!sidebarCollapsed ? (
           <aside
-            className="min-h-0 overflow-hidden border-r border-border bg-sidebar"
+            className="min-h-0 overflow-hidden border-r border-border bg-sidebar print:hidden"
             aria-label="Page thumbnails"
           >
             {sidebar}
@@ -114,10 +115,10 @@ export function AppShell({
         ) : null}
 
         <main
-          className="relative min-h-0 overflow-hidden bg-dot-grid"
+          className="relative min-h-0 overflow-hidden bg-dot-grid print:overflow-visible print:bg-none"
           aria-label="Document canvas"
         >
-          <div className="h-full min-h-0 overflow-auto">{children}</div>
+          <div className="h-full min-h-0 overflow-auto print:h-auto print:overflow-visible">{children}</div>
           {dragging ? (
             <div
               className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center bg-background/70 backdrop-blur-[2px]"
@@ -132,7 +133,7 @@ export function AppShell({
 
         {!propertiesCollapsed ? (
           <aside
-            className="min-h-0 overflow-hidden border-l border-border bg-sidebar"
+            className="min-h-0 overflow-hidden border-l border-border bg-sidebar print:hidden"
             aria-label="Properties"
           >
             {properties}
@@ -140,7 +141,7 @@ export function AppShell({
         ) : null}
       </div>
 
-      <footer className="flex h-7 shrink-0 items-center gap-2 border-t border-border bg-card/50 px-3 text-[11px]">
+      <footer className="flex h-7 shrink-0 items-center gap-2 border-t border-border bg-card/50 px-3 text-[11px] print:hidden">
         <span className={cn('min-w-0 flex-1 truncate', toneClass(statusTone))}>
           {statusMessage}
         </span>

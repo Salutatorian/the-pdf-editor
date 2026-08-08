@@ -3,6 +3,7 @@ import {
   PenLine,
   FormInput,
   Moon,
+  MoonStar,
   Sun,
   Settings,
   type LucideIcon,
@@ -72,11 +73,21 @@ export function EmptyState({
             variant="ghost"
             size="icon-sm"
             aria-label={
-              theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
+              theme === 'light'
+                ? 'Switch to dark mode'
+                : theme === 'dark'
+                  ? 'Switch to black mode'
+                  : 'Switch to light mode'
             }
             onClick={onToggleTheme}
           >
-            {theme === 'dark' ? <Sun /> : <Moon />}
+            {theme === 'light' ? (
+              <Moon />
+            ) : theme === 'dark' ? (
+              <MoonStar />
+            ) : (
+              <Sun />
+            )}
           </Button>
         ) : null}
         {onOpenSettings ? (

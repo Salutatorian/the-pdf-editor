@@ -55,7 +55,7 @@ export function ThumbnailSidebar({
                         alt=""
                         draggable={false}
                         decoding="async"
-                        className="aspect-[8.5/11] w-full rounded-sm border border-border object-contain bg-white"
+                        className="pdf-thumb aspect-[8.5/11] w-full rounded-sm border border-border object-contain bg-white"
                         style={{ imageRendering: 'auto' }}
                       />
                     ) : (

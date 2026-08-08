@@ -300,7 +300,7 @@ export function OrganizePanel({
                         <img
                           src={dataUrl}
                           alt={`Page ${i + 1}`}
-                          className="h-full w-full object-contain"
+                          className="pdf-thumb h-full w-full object-contain"
                           draggable={false}
                         />
                       ) : (

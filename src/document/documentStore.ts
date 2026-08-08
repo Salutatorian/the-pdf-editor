@@ -353,6 +353,10 @@ export const useDocumentStore = create<DocumentState>()(
         } else {
           state.selectedIds = [...ids];
         }
+        // Selecting an object reveals its Properties panel (fonts, size, …)
+        if (state.selectedIds.length > 0) {
+          state.showProperties = true;
+        }
       });
     },
 

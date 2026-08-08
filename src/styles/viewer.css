@@ -45,6 +45,22 @@
   display: block;
 }
 
+/* Chrome-style dark paper: invert the rendered page AND everything placed
+   on it (text, signatures, form inputs) so the page flips as one unit —
+   black ink reads light-on-dark, hue-rotate keeps colors roughly true.
+   Opt-in via Settings → Appearance ("Dark pages"), dark/black themes only.
+   Scanned/photo pages keep their true colors (inverting a photo makes an
+   unreadable negative). */
+.paper-dark .page-canvas:not([data-scan='true']) {
+  background: #14161a;
+}
+
+.paper-dark .page-canvas:not([data-scan='true']) .page-canvas__pdf,
+.paper-dark .page-canvas:not([data-scan='true']) .page-canvas__overlay,
+.paper-dark .pdf-thumb {
+  filter: invert(0.92) hue-rotate(180deg) contrast(0.92);
+}
+
 .page-canvas__text-layer {
   position: absolute;
   inset: 0;
@@ -278,6 +294,16 @@
 }
 
 @media print {
+  /* The app locks html/body/#root to the viewport with overflow hidden —
+     without this reset the print engine clips output to the visible slice. */
+  html,
+  body,
+  #root {
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
   header,
   footer,
   aside,
@@ -285,9 +311,35 @@
     display: none !important;
   }
 
+  /* Fit pages to the paper width — --print-zoom is set from JS just before
+     printing (screen zoom is usually wider than the printable area and the
+     print engine clips instead of scaling). `zoom` scales the page shell,
+     canvas, and overlays as one unit, so annotations stay aligned. */
+  .pdf-scroll {
+    zoom: var(--print-zoom, 1);
+  }
+
   .page-canvas {
     box-shadow: none;
+    min-width: 0;
+    min-height: 0;
     break-after: page;
+  }
+
+  /* Selection/search layer is invisible on paper; keep highlight boxes and
+     transparent spans out of the printed output. */
+  .page-canvas__text-layer {
+    display: none !important;
+  }
+
+  /* Never print the inverted "Dark pages" theme. */
+  .paper-dark .page-canvas:not([data-scan='true']) {
+    background: #fff !important;
+  }
+
+  .paper-dark .page-canvas:not([data-scan='true']) .page-canvas__pdf,
+  .paper-dark .page-canvas:not([data-scan='true']) .page-canvas__overlay {
+    filter: none !important;
   }
 }
 

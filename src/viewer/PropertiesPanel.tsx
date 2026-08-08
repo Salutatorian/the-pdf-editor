@@ -2,6 +2,7 @@ import { type ChangeEvent, type ReactNode } from 'react';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { DEFAULT_TEXT_FONT, TEXT_FONT_OPTIONS } from '../document/fonts.ts';
 
 export type SelectionGeometry = {
   x: number;
@@ -22,6 +23,10 @@ export type TextSelection = SelectionGeometry & {
   kind: 'text';
   content: string;
   fontSize?: number;
+  fontFamily?: string;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
 };
 
 export type SignatureSelection = SelectionGeometry & {
@@ -175,6 +180,50 @@ export function PropertiesPanel({ selection, onChange }: PropertiesPanelProps) {
                   aria-label="Text content"
                   onChange={(e) => onChange?.({ content: e.target.value })}
                 />
+              </Field>
+              <Field label="Font">
+                <select
+                  className="h-7 w-full rounded-md border border-input bg-transparent px-1.5 text-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                  value={selection.fontFamily ?? DEFAULT_TEXT_FONT}
+                  aria-label="Font"
+                  onChange={(e) => onChange?.({ fontFamily: e.target.value })}
+                >
+                  {TEXT_FONT_OPTIONS.map((f) => (
+                    <option key={f.label} value={f.cssFamily}>
+                      {f.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Style">
+                <div className="flex gap-1" role="group" aria-label="Text style">
+                  {(
+                    [
+                      { key: 'bold', label: 'B', title: 'Bold', cls: 'font-bold' },
+                      { key: 'italic', label: 'I', title: 'Italic', cls: 'italic' },
+                      { key: 'underline', label: 'U', title: 'Underline', cls: 'underline' },
+                    ] as const
+                  ).map((s) => {
+                    const active = Boolean(selection[s.key]);
+                    return (
+                      <button
+                        key={s.key}
+                        type="button"
+                        title={s.title}
+                        aria-label={s.title}
+                        aria-pressed={active}
+                        className={`h-7 w-7 rounded-md border text-xs transition-colors ${s.cls} ${
+                          active
+                            ? 'border-primary bg-primary text-primary-foreground'
+                            : 'border-input bg-transparent hover:bg-muted'
+                        }`}
+                        onClick={() => onChange?.({ [s.key]: !active })}
+                      >
+                        {s.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </Field>
               {selection.fontSize !== undefined ? (
                 <Field label="Font size">

@@ -35,6 +35,7 @@ import {
   Settings,
   Sun,
   Moon,
+  MoonStar,
 } from 'lucide-react';
 import { RecentFilesMenu } from './RecentFilesMenu';
 import { MODES, type AppMode } from './modes';
@@ -482,14 +483,34 @@ export function TopToolbar({
         ) : null}
 
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
-          <Tip label={theme === 'dark' ? 'Light mode' : 'Dark mode'}>
+          <Tip
+            label={
+              theme === 'light'
+                ? 'Dark mode'
+                : theme === 'dark'
+                  ? 'Black mode'
+                  : 'Light mode'
+            }
+          >
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              aria-label={
+                theme === 'light'
+                  ? 'Switch to dark mode'
+                  : theme === 'dark'
+                    ? 'Switch to black mode'
+                    : 'Switch to light mode'
+              }
               onClick={onToggleTheme}
             >
-              {theme === 'dark' ? <Sun /> : <Moon />}
+              {theme === 'light' ? (
+                <Moon />
+              ) : theme === 'dark' ? (
+                <MoonStar />
+              ) : (
+                <Sun />
+              )}
             </Button>
           </Tip>
           <Tip label="Keyboard shortcuts" shortcut="Ctrl+/">

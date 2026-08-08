@@ -25,6 +25,7 @@ import {
   patchAppSettings,
 } from './settings/appSettings.ts';
 import {
+  cycleTheme,
   getTheme,
   setTheme,
   type ThemeMode,
@@ -907,6 +908,25 @@ function AppInner() {
   ]);
 
   const handlePrint = useCallback(() => {
+    // The viewer renders at screen zoom, which is usually wider than the
+    // printable area (≈6.5in at 96dpi with default margins) — the print
+    // engine clips overflow instead of scaling it, so shrink the page stack
+    // via the CSS `zoom` hook consumed in viewer.css (@media print).
+    const PRINTABLE_WIDTH_PX = 6.5 * 96;
+    const pageEl = document.querySelector<HTMLElement>(
+      '.pdf-scroll .page-canvas',
+    );
+    const fit =
+      pageEl && pageEl.offsetWidth > PRINTABLE_WIDTH_PX
+        ? PRINTABLE_WIDTH_PX / pageEl.offsetWidth
+        : 1;
+    const root = document.documentElement;
+    root.style.setProperty('--print-zoom', String(fit));
+    window.addEventListener(
+      'afterprint',
+      () => root.style.removeProperty('--print-zoom'),
+      { once: true },
+    );
     window.print();
   }, []);
 
@@ -1114,9 +1134,10 @@ function AppInner() {
       store.setMode(next);
       if (next === 'add') setAddTool('text');
       if (next === 'sign') {
-        // Enter Sign mode with select so existing signatures stay draggable.
-        // Opening the pad is explicit via the Sign tool button.
-        setAddTool('select');
+        // Clicking Sign pops the signature pad immediately — no extra button
+        setAddTool('signature');
+        setPendingSig({ pageIndex: currentPage, x: 72, y: 520 });
+        setSigOpen(true);
       }
       if (next === 'view' || next === 'organize' || next === 'fill') {
         setAddTool('select');
@@ -1124,7 +1145,7 @@ function AppInner() {
       if (next === 'organize') setOrganizeSelected([]);
       void restoreUiAfterNativeDialog();
     },
-    [handleOpen, store],
+    [handleOpen, store, currentPage],
   );
 
   const handleOrganizeReorder = useCallback(
@@ -1514,6 +1535,10 @@ function AppInner() {
         rotation: selectedOverlay.rotation,
         content: selectedOverlay.text ?? '',
         fontSize: selectedOverlay.fontSize,
+        fontFamily: selectedOverlay.fontFamily,
+        bold: selectedOverlay.bold,
+        italic: selectedOverlay.italic,
+        underline: selectedOverlay.underline,
       };
     }
     if (selectedOverlay.kind === 'signature') {
@@ -1553,6 +1578,18 @@ function AppInner() {
         }
         if ('fontSize' in patch && patch.fontSize !== undefined) {
           overlayPatch.fontSize = patch.fontSize;
+        }
+        if ('fontFamily' in patch && patch.fontFamily !== undefined) {
+          overlayPatch.fontFamily = patch.fontFamily;
+        }
+        if ('bold' in patch && patch.bold !== undefined) {
+          overlayPatch.bold = patch.bold;
+        }
+        if ('italic' in patch && patch.italic !== undefined) {
+          overlayPatch.italic = patch.italic;
+        }
+        if ('underline' in patch && patch.underline !== undefined) {
+          overlayPatch.underline = patch.underline;
         }
       }
       store.updateOverlay(id, overlayPatch);
@@ -1731,7 +1768,7 @@ function AppInner() {
       onShowShortcuts={() => setShortcutsOpen(true)}
       onOpenSettings={() => setSettingsOpen(true)}
       theme={theme}
-      onToggleTheme={() => setThemeState(setTheme(theme === 'dark' ? 'light' : 'dark'))}
+      onToggleTheme={() => setThemeState(cycleTheme())}
       updateAvailable={Boolean(updateInfo)}
       recentFiles={recentFiles}
       onOpenRecent={(path, name) => void handleOpenRecent(path, name)}
@@ -1792,9 +1829,7 @@ function AppInner() {
             onClearRecent={handleClearRecent}
             onFileInput={(file) => void handleDropFiles([file])}
             theme={theme}
-            onToggleTheme={() =>
-              setThemeState(setTheme(theme === 'dark' ? 'light' : 'dark'))
-            }
+            onToggleTheme={() => setThemeState(cycleTheme())}
             onOpenSettings={() => setSettingsOpen(true)}
           />
         ) : mode === 'organize' ? (

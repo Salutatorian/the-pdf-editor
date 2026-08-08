@@ -22,6 +22,7 @@ import {
   type PDFPage,
 } from 'pdf-lib';
 import type { FormField, OverlayObject } from '../document/types.ts';
+import { pdfBaseForFamily } from '../document/fonts.ts';
 import {
   hasEofMarker,
   isNonEmptyPdf,
@@ -309,10 +310,73 @@ function wrapTextToWidth(
   return out.length > 0 ? out : [''];
 }
 
+/**
+ * Saved PDFs can only use the 14 standard fonts without embedding font
+ * files, so text overlays map to Helvetica / Times-Roman / Courier with
+ * real bold/italic variants. On-screen the chosen CSS font is used.
+ */
+function standardFontFor(overlay: OverlayObject): StandardFonts {
+  const base = pdfBaseForFamily(overlay.fontFamily);
+  const bold = Boolean(overlay.bold);
+  const italic = Boolean(overlay.italic);
+  switch (base) {
+    case 'serif':
+      if (bold && italic) return StandardFonts.TimesRomanBoldItalic;
+      if (bold) return StandardFonts.TimesRomanBold;
+      if (italic) return StandardFonts.TimesRomanItalic;
+      return StandardFonts.TimesRoman;
+    case 'mono':
+      if (bold && italic) return StandardFonts.CourierBoldOblique;
+      if (bold) return StandardFonts.CourierBold;
+      if (italic) return StandardFonts.CourierOblique;
+      return StandardFonts.Courier;
+    case 'sans':
+      if (bold && italic) return StandardFonts.HelveticaBoldOblique;
+      if (bold) return StandardFonts.HelveticaBold;
+      if (italic) return StandardFonts.HelveticaOblique;
+      return StandardFonts.Helvetica;
+    default: {
+      const exhaustive: never = base;
+      return exhaustive;
+    }
+  }
+}
+
+/** Underline baked ink: a line just below the baseline, rotated with the text. */
+function drawUnderline(
+  page: PDFPage,
+  overlay: OverlayObject,
+  font: PDFFont,
+  baselineY: number,
+  size: number,
+  color: { r: number; g: number; b: number },
+  opacity: number,
+): void {
+  const content = overlay.text ?? '';
+  if (!content.trim()) return;
+  const longest = content
+    .split(/\r?\n/)
+    .reduce((max, line) => Math.max(max, font.widthOfTextAtSize(line, size)), 0);
+  if (longest <= 0) return;
+  const underlineY = baselineY - Math.max(1.5, size * 0.12);
+  const angle = (-(overlay.rotation ?? 0) * Math.PI) / 180;
+  page.drawLine({
+    start: { x: overlay.x, y: underlineY },
+    end: {
+      x: overlay.x + Math.cos(angle) * longest,
+      y: underlineY + Math.sin(angle) * longest,
+    },
+    thickness: Math.max(0.5, size / 14),
+    color: rgb(color.r, color.g, color.b),
+    opacity,
+  });
+}
+
 function drawOverlay(
   page: PDFPage,
   overlay: OverlayObject,
   font: PDFFont,
+  fonts: Map<StandardFonts, PDFFont>,
   images: Map<string, Awaited<ReturnType<PDFDocument['embedPng']>>>,
 ): void {
   const pageHeight = page.getHeight();
@@ -326,15 +390,20 @@ function drawOverlay(
     case 'date':
     case 'initials': {
       const size = overlay.fontSize ?? 12;
+      const textFont = fonts.get(standardFontFor(overlay)) ?? font;
+      const baselineY = pdfY + (overlay.height - size) / 2;
       page.drawText(overlay.text ?? '', {
         x: overlay.x,
-        y: pdfY + (overlay.height - size) / 2,
+        y: baselineY,
         size,
-        font,
+        font: textFont,
         color: rgb(color.r, color.g, color.b),
         opacity,
         rotate: overlay.rotation ? degrees(-overlay.rotation) : undefined,
       });
+      if (overlay.underline) {
+        drawUnderline(page, overlay, textFont, baselineY, size, color, opacity);
+      }
       break;
     }
     case 'highlight': {
@@ -525,10 +594,23 @@ export async function buildPdfWithEdits(
   }
 
   const sorted = [...overlays].sort((a, b) => a.zIndex - b.zIndex);
+
+  // Embed only the standard-font variants the text overlays actually use
+  const fonts = new Map<StandardFonts, PDFFont>([[StandardFonts.Helvetica, font]]);
+  for (const overlay of sorted) {
+    if (overlay.kind !== 'text' && overlay.kind !== 'date' && overlay.kind !== 'initials') {
+      continue;
+    }
+    const variant = standardFontFor(overlay);
+    if (!fonts.has(variant)) {
+      fonts.set(variant, await pdfDoc.embedFont(variant));
+    }
+  }
+
   for (const overlay of sorted) {
     const page = pages[overlay.pageIndex];
     if (!page) continue;
-    drawOverlay(page, overlay, font, imageCache);
+    drawOverlay(page, overlay, font, fonts, imageCache);
   }
 
   const saved = await pdfDoc.save({ useObjectStreams: false });

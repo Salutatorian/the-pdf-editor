@@ -121,6 +121,16 @@ function OverlayNode({
             text={overlay.text ?? (overlay.kind === 'date' ? new Date().toLocaleDateString() : '')}
             fontSize={(overlay.fontSize ?? 14) * scale}
             fontFamily={overlay.fontFamily ?? 'IBM Plex Sans'}
+            fontStyle={
+              overlay.italic
+                ? overlay.bold
+                  ? 'italic bold'
+                  : 'italic'
+                : overlay.bold
+                  ? 'bold'
+                  : 'normal'
+            }
+            textDecoration={overlay.underline ? 'underline' : ''}
             fill={overlay.color ?? '#111111'}
           />
         </Group>
@@ -723,6 +733,9 @@ export function OverlayEditor({
           height: Math.max(editingOverlay.height * scale, 24),
           fontSize: (editingOverlay.fontSize ?? 14) * scale,
           fontFamily: editingOverlay.fontFamily ?? 'IBM Plex Sans',
+          fontWeight: editingOverlay.bold ? 700 : 400,
+          fontStyle: editingOverlay.italic ? 'italic' : 'normal',
+          textDecoration: editingOverlay.underline ? 'underline' : 'none',
           color: editingOverlay.color ?? '#111111',
           lineHeight: 1.2,
           margin: 0,
