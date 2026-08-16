@@ -371,14 +371,16 @@ function AppInner() {
     setUpdateProgress(null);
     void (async () => {
       const result = await installAppUpdate(updateInfo, setUpdateProgress);
-      if (result === 'opened-browser') {
+      if (result === 'failed') {
         setUpdateInstalling(false);
         setUpdateProgress(null);
-        setShowUpdateToast(false);
+        store.setStatus(
+          'Could not install update in-app — try again in a minute',
+        );
       }
       // 'installed' relaunches — no need to reset UI
     })();
-  }, [updateInfo, updateInstalling]);
+  }, [updateInfo, updateInstalling, store]);
 
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {

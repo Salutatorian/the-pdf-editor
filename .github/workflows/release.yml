@@ -93,19 +93,21 @@ jobs:
     needs: publish-tauri
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: Rebuild and upload merged latest.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
+          REPO="${{ github.repository }}"
           mkdir -p assets && cd assets
-          gh release download "$TAG" --pattern '*.sig' --pattern 'latest.json' --clobber
+          # --repo required: this job's cwd is not enough for gh without a .git checkout
+          gh release download "$TAG" --repo "$REPO" --pattern '*.sig' --pattern 'latest.json' --clobber
           python3 - "$TAG" <<'PYEOF'
-          import glob, json, os, sys
+          import glob, json, sys
 
           tag = sys.argv[1]
-          version = tag.lstrip('v')
           base = f'https://github.com/Salutatorian/the-pdf-editor/releases/download/{tag}'
 
           with open('latest.json') as f:
@@ -136,4 +138,4 @@ jobs:
               json.dump(d, f, indent=2)
           print('platforms:', sorted(d['platforms'].keys()))
           PYEOF
-          gh release upload "$TAG" latest.json --clobber
+          gh release upload "$TAG" latest.json --repo "$REPO" --clobber

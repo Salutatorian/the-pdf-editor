@@ -35,8 +35,9 @@ import {
 } from './changelog.ts';
 import {
   checkForAppUpdate,
-  openUpdateDownload,
+  installAppUpdate,
   type UpdateInfo,
+  type UpdateProgress,
 } from './updateService.ts';
 import type { ThemeMode } from './theme.ts';
 import { setDarkPaper } from './theme.ts';
@@ -131,6 +132,7 @@ export function SettingsDialog({
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
+  const [installing, setInstalling] = useState(false);
   const [panel, setPanel] = useState<'general' | 'notes'>('general');
   const desktop = isTauri();
 
@@ -174,6 +176,35 @@ export function SettingsDialog({
     }
     onUpdateAvailable(info);
     setStatus(`Version ${info.version} is available.`);
+  };
+
+  const onInstallUpdate = async () => {
+    if (!updateAvailable || installing) return;
+    setInstalling(true);
+    setStatus('Downloading update…');
+    try {
+      const result = await installAppUpdate(updateAvailable, (p: UpdateProgress) => {
+        if (p.contentLength && p.contentLength > 0) {
+          const pct = Math.min(
+            100,
+            Math.round((p.downloaded / p.contentLength) * 100),
+          );
+          setStatus(`Downloading update… ${pct}%`);
+        }
+      });
+      if (result === 'failed') {
+        setStatus(
+          'Could not install in-app. Wait a minute and try again — the update files may still be publishing.',
+        );
+        setInstalling(false);
+      }
+      // 'installed' relaunches the app
+    } catch (err) {
+      setStatus(
+        err instanceof Error ? err.message : 'Update install failed',
+      );
+      setInstalling(false);
+    }
   };
 
   return (
@@ -313,16 +344,19 @@ export function SettingsDialog({
                     <Button
                       type="button"
                       size="sm"
-                      onClick={() => void openUpdateDownload(updateAvailable)}
+                      disabled={installing || !desktop}
+                      onClick={() => void onInstallUpdate()}
                     >
-                      Update to {updateAvailable.version}
+                      {installing
+                        ? 'Installing…'
+                        : `Update to ${updateAvailable.version}`}
                     </Button>
                   ) : null}
                 </div>
                 {updateAvailable ? (
                   <p className="text-xs text-muted-foreground">
-                    An update is available. After you install and reopen, you
-                    will see What&apos;s New once.
+                    Installs in the app and relaunches — no browser download.
+                    After reopen, you will see What&apos;s New once.
                   </p>
                 ) : null}
               </section>

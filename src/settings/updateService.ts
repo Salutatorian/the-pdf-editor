@@ -116,48 +116,51 @@ export async function openUpdateDownload(info: UpdateInfo): Promise<void> {
 
 /**
  * Download + install the update in-app, then relaunch.
- * Falls back to opening the GitHub release page if the updater is unavailable.
+ * Never opens a browser — returns 'failed' if the updater can't install.
  */
 export async function installAppUpdate(
   info: UpdateInfo,
   onProgress?: (progress: UpdateProgress) => void,
-): Promise<'installed' | 'opened-browser'> {
-  if (isTauri()) {
-    try {
-      const { check } = await import('@tauri-apps/plugin-updater');
-      const { relaunch } = await import('@tauri-apps/plugin-process');
-      const update = await check();
-      if (!update) {
-        await openUpdateDownload(info);
-        return 'opened-browser';
-      }
-
-      let downloaded = 0;
-      let contentLength: number | null = null;
-      await update.downloadAndInstall((event) => {
-        if (event.event === 'Started') {
-          contentLength = event.data.contentLength ?? null;
-          downloaded = 0;
-          onProgress?.({ downloaded, contentLength });
-          return;
-        }
-        if (event.event === 'Progress') {
-          downloaded += event.data.chunkLength;
-          onProgress?.({ downloaded, contentLength });
-          return;
-        }
-        if (event.event === 'Finished') {
-          onProgress?.({ downloaded, contentLength });
-        }
-      });
-      await relaunch();
-      return 'installed';
-    } catch {
-      await openUpdateDownload(info);
-      return 'opened-browser';
-    }
+): Promise<'installed' | 'failed'> {
+  if (!isTauri()) {
+    return 'failed';
   }
 
-  await openUpdateDownload(info);
-  return 'opened-browser';
+  try {
+    const { check } = await import('@tauri-apps/plugin-updater');
+    const { relaunch } = await import('@tauri-apps/plugin-process');
+    const update = await check();
+    if (!update) {
+      console.error(
+        'Updater check returned no update (expected',
+        info.version,
+        ')',
+      );
+      return 'failed';
+    }
+
+    let downloaded = 0;
+    let contentLength: number | null = null;
+    await update.downloadAndInstall((event) => {
+      if (event.event === 'Started') {
+        contentLength = event.data.contentLength ?? null;
+        downloaded = 0;
+        onProgress?.({ downloaded, contentLength });
+        return;
+      }
+      if (event.event === 'Progress') {
+        downloaded += event.data.chunkLength;
+        onProgress?.({ downloaded, contentLength });
+        return;
+      }
+      if (event.event === 'Finished') {
+        onProgress?.({ downloaded, contentLength });
+      }
+    });
+    await relaunch();
+    return 'installed';
+  } catch (err) {
+    console.error('In-app update failed', err);
+    return 'failed';
+  }
 }

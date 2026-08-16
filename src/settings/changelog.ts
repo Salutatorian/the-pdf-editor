@@ -18,6 +18,21 @@ export type ChangelogRelease = {
  */
 export const CHANGELOG: readonly ChangelogRelease[] = [
   {
+    version: '1.4.3',
+    title: 'In-app updates only',
+    date: '2026-08-17',
+    items: [
+      {
+        kind: 'fixed',
+        text: 'Update never opens GitHub in the browser — Settings and the toast install inside the app',
+      },
+      {
+        kind: 'fixed',
+        text: 'Release CI reliably rebuilds latest.json so Windows/macOS/Linux updates publish together',
+      },
+    ],
+  },
+  {
     version: '1.4.2',
     title: 'Open with PDF · transparent text typing',
     date: '2026-08-16',
