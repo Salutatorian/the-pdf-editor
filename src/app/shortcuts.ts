@@ -107,7 +107,7 @@ export const SHORTCUT_HELP: ReadonlyArray<ShortcutHelpEntry> = [
   {
     action: 'selectAll',
     label: 'Select all overlays',
-    keys: 'Ctrl+A',
+    keys: 'Ctrl+A (not while typing in a field)',
     category: 'Edit',
   },
   {
@@ -311,6 +311,39 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return Boolean(target.closest("[contenteditable='true']"));
 }
 
+/**
+ * Shortcuts that stay active while focus is in an input/textarea.
+ * Everything else (Ctrl+A select-all overlays, undo, duplicate, nudge…)
+ * must not preventDefault — otherwise Fill typing can't select/copy/paste.
+ */
+const ALLOW_WHILE_EDITING: ReadonlySet<ShortcutAction> = new Set([
+  'open',
+  'save',
+  'saveAs',
+  'print',
+  'showShortcuts',
+  'clearSelection',
+  'toggleSidebar',
+  'modeView',
+  'modeFill',
+  'modeAdd',
+  'modeSign',
+  'modeOrganize',
+  'zoomIn',
+  'zoomOut',
+  'zoomReset',
+  'zoom100',
+  'zoom200',
+  'zoom50',
+  'zoomFitPage',
+  'zoomFitWidth',
+]);
+
+/** Exported for tests — whether a matched action may run while typing. */
+export function allowShortcutWhileEditing(action: ShortcutAction): boolean {
+  return ALLOW_WHILE_EDITING.has(action);
+}
+
 function matchesChord(e: KeyboardEvent, chord: Chord): boolean {
   const key = e.key.toLowerCase();
   if (key !== chord.key) return false;
@@ -383,7 +416,7 @@ export function useKeyboardShortcuts(
       if (inInput && !hasMod && e.key !== 'Escape' && e.key !== 'F1') {
         return;
       }
-      // Space in inputs should type a space, not page-next
+      // Space / page keys in inputs should type or move the caret, not change pages
       if (inInput && (e.key === ' ' || e.key === 'PageUp' || e.key === 'PageDown')) {
         return;
       }
@@ -410,8 +443,10 @@ export function useKeyboardShortcuts(
 
       for (const chord of CHORDS) {
         if (!matchesChord(e, chord)) continue;
-        // Space/arrows only nudge when not filling form focus randomly —
-        // still OK outside inputs.
+        // Let the browser handle Ctrl+A / Z / C / V / X / arrows / etc. in fields
+        if (inInput && !allowShortcutWhileEditing(chord.action)) {
+          continue;
+        }
         const handler = handlers[chord.action];
         if (!handler) continue;
         e.preventDefault();

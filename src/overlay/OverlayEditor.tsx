@@ -19,6 +19,35 @@ import {
 } from './alignment.ts';
 import { toolByKind, type AddToolDef } from './tools.ts';
 
+/** Bake Transformer scale into width/height so text/images don't stay stretched. */
+function bakeTransformScale(node: Konva.Node): { width: number; height: number } {
+  const scaleX = node.scaleX();
+  const scaleY = node.scaleY();
+  const width = Math.max(4, node.width() * scaleX);
+  const height = Math.max(4, node.height() * scaleY);
+  node.scaleX(1);
+  node.scaleY(1);
+  node.width(width);
+  node.height(height);
+
+  if (node.getClassName() === 'Group') {
+    const group = node as Konva.Group;
+    for (const child of group.getChildren()) {
+      const cls = child.getClassName();
+      if (cls === 'Rect' || cls === 'Image') {
+        child.width(width);
+        child.height(height);
+      } else if (cls === 'Text') {
+        // Grow the layout box only — keep fontSize so glyphs never squash/stretch
+        child.width(Math.max(4, width - 4));
+        child.height(Math.max(4, height - 2));
+      }
+    }
+  }
+
+  return { width, height };
+}
+
 export type OverlayEditorProps = {
   pageIndex: number;
   width: number;
@@ -60,20 +89,24 @@ function OverlayNode({
   overlay,
   scale,
   draggable,
+  selected,
   onSelect,
   onDblClick,
   onDragMove,
   onDragEnd,
+  onTransform,
   onTransformEnd,
   nodeRefs,
 }: {
   overlay: OverlayObject;
   scale: number;
   draggable: boolean;
+  selected: boolean;
   onSelect: (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => void;
   onDblClick?: (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => void;
   onDragMove: (e: Konva.KonvaEventObject<DragEvent>) => void;
   onDragEnd: (e: Konva.KonvaEventObject<DragEvent>) => void;
+  onTransform?: (e: Konva.KonvaEventObject<Event>) => void;
   onTransformEnd: (e: Konva.KonvaEventObject<Event>) => void;
   nodeRefs: Map<string, Konva.Node>;
 }) {
@@ -93,6 +126,7 @@ function OverlayNode({
     onDblTap: onDblClick,
     onDragMove,
     onDragEnd,
+    onTransform,
     onTransformEnd,
     ref: (node: Konva.Node | null) => {
       if (node) nodeRefs.set(overlay.id, node);
@@ -103,26 +137,72 @@ function OverlayNode({
   switch (overlay.kind) {
     case 'text':
     case 'date':
-    case 'initials':
+    case 'initials': {
+      const w = overlay.width * scale;
+      const h = overlay.height * scale;
+      const label =
+        overlay.text ??
+        (overlay.kind === 'date' ? new Date().toLocaleDateString() : '');
+      const showFrame = selected || !label.trim();
+      // Group + hit rect so empty / short text stays clickable and draggable
+      // across the whole box, not just the glyph bounds.
       return (
-        <Text
-          {...common}
-          text={overlay.text ?? (overlay.kind === 'date' ? new Date().toLocaleDateString() : '')}
-          fontSize={(overlay.fontSize ?? 14) * scale}
-          fontFamily={overlay.fontFamily ?? 'IBM Plex Sans'}
-          fontStyle={
-            overlay.italic
-              ? overlay.bold
-                ? 'italic bold'
-                : 'italic'
-              : overlay.bold
-                ? 'bold'
-                : 'normal'
-          }
-          textDecoration={overlay.underline ? 'underline' : ''}
-          fill={overlay.color ?? '#111111'}
-        />
+        <Group
+          id={overlay.id}
+          x={overlay.x * scale}
+          y={overlay.y * scale}
+          width={w}
+          height={h}
+          rotation={overlay.rotation}
+          draggable={draggable}
+          opacity={overlay.opacity ?? 1}
+          onClick={onSelect}
+          onTap={onSelect}
+          onDblClick={onDblClick}
+          onDblTap={onDblClick}
+          onDragMove={onDragMove}
+          onDragEnd={onDragEnd}
+          onTransform={onTransform}
+          onTransformEnd={onTransformEnd}
+          ref={(node) => {
+            if (node) nodeRefs.set(overlay.id, node);
+            else nodeRefs.delete(overlay.id);
+          }}
+        >
+          <Rect
+            x={0}
+            y={0}
+            width={w}
+            height={h}
+            fill="rgba(0,0,0,0.001)"
+            stroke={showFrame ? 'rgba(47, 127, 212, 0.45)' : undefined}
+            strokeWidth={showFrame ? 1 : 0}
+            dash={showFrame ? [4, 3] : undefined}
+          />
+          <Text
+            x={2}
+            y={1}
+            width={Math.max(4, w - 4)}
+            height={Math.max(4, h - 2)}
+            text={label}
+            fontSize={(overlay.fontSize ?? 14) * scale}
+            fontFamily={overlay.fontFamily ?? 'IBM Plex Sans'}
+            fontStyle={
+              overlay.italic
+                ? overlay.bold
+                  ? 'italic bold'
+                  : 'italic'
+                : overlay.bold
+                  ? 'bold'
+                  : 'normal'
+            }
+            textDecoration={overlay.underline ? 'underline' : ''}
+            fill={overlay.color ?? '#111111'}
+            listening={false}
+          />
+        </Group>
       );
+    }
     case 'highlight':
       return (
         <Rect
@@ -168,6 +248,7 @@ function OverlayNode({
             onTap={onSelect}
             onDragMove={onDragMove}
             onDragEnd={onDragEnd}
+            onTransform={onTransform}
             onTransformEnd={onTransformEnd}
             ref={(node) => {
               if (node) nodeRefs.set(overlay.id, node);
@@ -254,6 +335,7 @@ function OverlayNode({
           onDblTap={onDblClick}
           onDragMove={onDragMove}
           onDragEnd={onDragEnd}
+          onTransform={onTransform}
           onTransformEnd={onTransformEnd}
           ref={(node) => {
             if (node) nodeRefs.set(overlay.id, node);
@@ -421,12 +503,18 @@ export function OverlayEditor({
     setEditingId(overlay.id);
   };
 
-  const commitEdit = () => {
+  const commitEdit = (opts?: { consumeTool?: boolean }) => {
     if (!editingId) return;
     onUpdate(editingId, { text: editDraft });
     setEditingId(null);
-    // Back to Select so move/resize handles appear after typing
-    onToolConsumed?.();
+    // Don't auto-switch to Select on blur — that ate the next click meant to
+    // place another text box. Only consume when the user explicitly finishes.
+    if (opts?.consumeTool) onToolConsumed?.();
+  };
+
+  const clickedEmptyStage = (target: Konva.Node, stage: Konva.Stage) => {
+    // Empty hits often land on Layer, not Stage — both count as "page".
+    return target === stage || target.getType() === 'Layer';
   };
 
   useEffect(() => {
@@ -482,29 +570,29 @@ export function OverlayEditor({
     if (!interactive) return;
     const stage = e.target.getStage();
     if (!stage) return;
-    if (e.target === stage) {
-      if (!activeTool) {
-        onSelect([]);
-        return;
-      }
-      const pos = stage.getPointerPosition();
-      if (!pos) return;
-      const { x, y } = toPagePoint(pos.x, pos.y);
+    if (!clickedEmptyStage(e.target, stage)) return;
 
-      if (activeTool === 'signature') {
-        onRequestSignature?.({ x, y });
-        return;
-      }
-      if (activeTool === 'image') {
-        onRequestImage?.({ x, y });
-        return;
-      }
-      if (activeTool === 'draw' || activeTool === 'highlight' || activeTool === 'redact') {
-        return;
-      }
-
-      placeTextLikeTool(activeTool, x, y);
+    if (!activeTool) {
+      onSelect([]);
+      return;
     }
+    const pos = stage.getPointerPosition();
+    if (!pos) return;
+    const { x, y } = toPagePoint(pos.x, pos.y);
+
+    if (activeTool === 'signature') {
+      onRequestSignature?.({ x, y });
+      return;
+    }
+    if (activeTool === 'image') {
+      onRequestImage?.({ x, y });
+      return;
+    }
+    if (activeTool === 'draw' || activeTool === 'highlight' || activeTool === 'redact') {
+      return;
+    }
+
+    placeTextLikeTool(activeTool, x, y);
   };
 
   const handleContextMenu = (e: Konva.KonvaEventObject<PointerEvent>) => {
@@ -544,7 +632,7 @@ export function OverlayEditor({
   const handleMouseDown = (e: Konva.KonvaEventObject<MouseEvent>) => {
     if (!interactive || !activeTool) return;
     const stage = e.target.getStage();
-    if (!stage || e.target !== stage) return;
+    if (!stage || !clickedEmptyStage(e.target, stage)) return;
     const pos = stage.getPointerPosition();
     if (!pos) return;
     const pt = toPagePoint(pos.x, pos.y);
@@ -652,23 +740,14 @@ export function OverlayEditor({
             <OverlayNode
               overlay={overlay}
               scale={scale}
+              selected={selectedIds.includes(overlay.id)}
               draggable={interactive && !editingId}
               nodeRefs={nodeRefs.current}
               onSelect={(e) => {
                 e.cancelBubble = true;
                 const additive =
                   e.evt.shiftKey || e.evt.ctrlKey || e.evt.metaKey;
-                // One click on text → type immediately (no double-click)
-                if (
-                  interactive &&
-                  !additive &&
-                  (overlay.kind === 'text' ||
-                    overlay.kind === 'date' ||
-                    overlay.kind === 'initials')
-                ) {
-                  beginEdit(overlay);
-                  return;
-                }
+                // Single click selects so the box can be dragged; double-click types.
                 onSelect([overlay.id], additive);
               }}
               onDblClick={(e) => {
@@ -699,17 +778,18 @@ export function OverlayEditor({
                   y: node.y() / scale,
                 });
               }}
+              onTransform={(e) => {
+                // Live: convert scale → box size so text never looks stretched mid-drag
+                bakeTransformScale(e.target);
+              }}
               onTransformEnd={(e) => {
                 const node = e.target;
-                const scaleX = node.scaleX();
-                const scaleY = node.scaleY();
-                node.scaleX(1);
-                node.scaleY(1);
+                const { width, height } = bakeTransformScale(node);
                 onUpdate(overlay.id, {
                   x: node.x() / scale,
                   y: node.y() / scale,
-                  width: Math.max(4, (node.width() * scaleX) / scale),
-                  height: Math.max(4, (node.height() * scaleY) / scale),
+                  width: width / scale,
+                  height: height / scale,
                   rotation: node.rotation(),
                 });
               }}
@@ -758,7 +838,7 @@ export function OverlayEditor({
           ),
         )}
 
-        {interactive && !activeTool && !editingId ? (
+        {interactive && !editingId ? (
           <Transformer
             ref={trRef}
             rotateEnabled
@@ -817,7 +897,7 @@ export function OverlayEditor({
           }
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            commitEdit();
+            commitEdit({ consumeTool: true });
           }
         }}
       />

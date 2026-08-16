@@ -15,6 +15,10 @@
 
 import {
   PDFDocument,
+  PDFName,
+  PDFDict,
+  PDFArray,
+  PDFRef,
   degrees,
   rgb,
   StandardFonts,
@@ -23,11 +27,14 @@ import {
 } from 'pdf-lib';
 import type { FormField, OverlayObject } from '../document/types.ts';
 import { pdfBaseForFamily } from '../document/fonts.ts';
+import { formFieldTextSize } from '../forms/formFieldTypography.ts';
 import {
   hasEofMarker,
   isNonEmptyPdf,
   verifyPdfStructure,
 } from './verifyPdf.ts';
+
+export { formFieldTextSize } from '../forms/formFieldTypography.ts';
 
 export type SaveResult =
   | {
@@ -126,163 +133,10 @@ async function embedImage(
   return pdfDoc.embedPng(bytes);
 }
 
-function baseFieldName(name: string): string {
-  return name.replace(/#\d+$/, '');
-}
-
-/** Map UI fields to AcroForm names (supports `name#0` widget clones). */
-function indexFormFieldsByName(
-  formFields: FormField[],
-): Map<string, FormField> {
-  const map = new Map<string, FormField>();
-  for (const f of formFields) {
-    map.set(f.name, f);
-    const base = baseFieldName(f.name);
-    // Prefer an exact match later; only set base if free
-    if (!map.has(base)) map.set(base, f);
-  }
-  return map;
-}
-
-async function applyFormValues(
-  pdfDoc: PDFDocument,
-  formFields: FormField[],
-): Promise<void> {
-  let form;
-  try {
-    form = pdfDoc.getForm();
-  } catch {
-    return;
-  }
-  const fieldsByName = indexFormFieldsByName(formFields);
-
-  for (const field of form.getFields()) {
-    const name = field.getName();
-    const source =
-      fieldsByName.get(name) ?? fieldsByName.get(baseFieldName(name));
-    if (!source) continue;
-
-    const ctor = field.constructor.name;
-    try {
-      if (ctor === 'PDFTextField') {
-        const textField = form.getTextField(name);
-        // Don't dump a PNG data-URL into a text widget
-        if (source.value.startsWith('data:image/')) continue;
-        textField.setText(source.value);
-      } else if (ctor === 'PDFCheckBox') {
-        const checkBox = form.getCheckBox(name);
-        if (
-          source.value === 'true' ||
-          source.value === 'Yes' ||
-          source.value === '1' ||
-          source.value === 'on'
-        ) {
-          checkBox.check();
-        } else {
-          checkBox.uncheck();
-        }
-      } else if (ctor === 'PDFRadioGroup') {
-        const radio = form.getRadioGroup(name);
-        if (source.value) radio.select(source.value);
-      } else if (ctor === 'PDFDropdown') {
-        const dropdown = form.getDropdown(name);
-        if (source.value) dropdown.select(source.value);
-      } else if (ctor === 'PDFOptionList') {
-        const list = form.getOptionList(name);
-        if (source.value) list.select(source.value);
-      }
-    } catch {
-      // Skip fields that cannot be updated (locked / mismatched type).
-    }
-  }
-}
-
 /**
- * Draw filled values as permanent page ink so ANY PDF viewer (browser,
- * Preview, etc.) shows the wording — not only apps that read AcroForm.
+ * Soft-wrap so saved ink stays inside the field (no sideways spill).
+ * Declared early — sizing + draw both use it.
  */
-function drawFilledFormFields(
-  pdfDoc: PDFDocument,
-  formFields: FormField[],
-  font: PDFFont,
-  /** When true, only draw Smart Fill fields (AcroForm will be flattened). */
-  syntheticOnly: boolean,
-): void {
-  const pages = pdfDoc.getPages();
-  for (const field of formFields) {
-    if (syntheticOnly && !field.synthetic) continue;
-    const page = pages[field.pageIndex];
-    if (!page) continue;
-    const pageHeight = page.getHeight();
-    const pdfY = toPdfY(pageHeight, field.rect.y, field.rect.height);
-
-    if (field.type === 'checkbox') {
-      const on =
-        field.value === 'true' ||
-        field.value === 'Yes' ||
-        field.value === '1' ||
-        field.value === 'on';
-      if (!on && !field.synthetic) continue;
-      if (field.synthetic) {
-        page.drawRectangle({
-          x: field.rect.x,
-          y: pdfY,
-          width: field.rect.width,
-          height: field.rect.height,
-          borderColor: rgb(0.1, 0.1, 0.1),
-          borderWidth: 1,
-          color: rgb(1, 1, 1),
-        });
-      }
-      if (on) {
-        page.drawText('X', {
-          x: field.rect.x + 2,
-          y: pdfY + 2,
-          size: Math.max(9, field.rect.height - 3),
-          font,
-          color: rgb(0, 0, 0),
-        });
-      }
-      continue;
-    }
-
-    if (field.type === 'signature' && field.value.startsWith('data:image/')) {
-      continue;
-    }
-
-    if (field.value.startsWith('data:image/')) continue;
-
-    const text = field.value?.trim();
-    if (!text) continue;
-    // Helvetica / WinAnsi — drop characters that would throw on save
-    const safe = text.replace(/[^\x09\x0A\x0D\x20-\x7E]/g, '?');
-    const maxWidth = Math.max(8, field.rect.width - 4);
-    const size = Math.min(
-      11,
-      Math.max(8, Math.min(field.rect.height * 0.55, 12)),
-    );
-    const lineHeight = size * 1.2;
-    const lines = wrapTextToWidth(safe, font, size, maxWidth);
-    const maxLines = Math.max(1, Math.floor(field.rect.height / lineHeight));
-    // PDF y grows up — start at top of box and step down; clip extras
-    let cursorY = pdfY + field.rect.height - size - 1;
-    for (let i = 0; i < Math.min(lines.length, maxLines); i++) {
-      const line = lines[i];
-      if (line === undefined) continue;
-      page.drawText(line, {
-        x: field.rect.x + 2,
-        y: cursorY,
-        size,
-        font,
-        color: rgb(0, 0, 0),
-      });
-      cursorY -= lineHeight;
-      if (cursorY < pdfY - 1) break;
-    }
-  }
-}
-
-/** Soft-wrap so saved ink stays inside the field (no Stirling-style sideways spill). */
 function wrapTextToWidth(
   text: string,
   font: PDFFont,
@@ -308,6 +162,163 @@ function wrapTextToWidth(
     if (line) out.push(line);
   }
   return out.length > 0 ? out : [''];
+}
+
+/**
+ * Shrink point size until wrapped lines fit the fitted box.
+ * Fixes narrow cells (e.g. "Date completed") clipping to "023 & 202".
+ */
+function fitFormFieldFontSize(
+  rect: { width: number; height: number },
+  text: string,
+  font: PDFFont,
+): number {
+  let size = formFieldTextSize(rect);
+  const maxWidth = Math.max(8, rect.width - 4);
+  while (size > 6) {
+    const lineHeight = size * 1.2;
+    const lines = wrapTextToWidth(text, font, size, maxWidth);
+    const maxLines = Math.max(1, Math.floor(rect.height / lineHeight));
+    if (lines.length <= maxLines) return size;
+    size -= 0.5;
+  }
+  return 6;
+}
+
+/**
+ * Drop the interactive form without pdf-lib's removeField/flatten.
+ *
+ * Real employment PDFs often have widgets whose /AP ref is missing. Calling
+ * getForm().removeField() or save()'s default updateFieldAppearances then
+ * throws: "Expected instance of PDFDict or PDFStream, but got instance of
+ * undefined" — and Save fails entirely.
+ *
+ * We already baked fill ink; delete /AcroForm + Widget annots so viewers
+ * show that ink without auto-sized appearances.
+ */
+function stripAcroFormSafely(pdfDoc: PDFDocument): void {
+  try {
+    pdfDoc.catalog.delete(PDFName.of('AcroForm'));
+  } catch {
+    // catalog may already lack AcroForm
+  }
+
+  for (const page of pdfDoc.getPages()) {
+    try {
+      const annots = page.node.lookupMaybe(PDFName.of('Annots'), PDFArray);
+      if (!annots) continue;
+
+      const kept = PDFArray.withContext(pdfDoc.context);
+      for (let i = 0; i < annots.size(); i++) {
+        const entry = annots.get(i);
+        if (!(entry instanceof PDFRef)) {
+          // Rare direct dict — keep if not a Widget
+          if (entry instanceof PDFDict) {
+            const subtype = entry.get(PDFName.of('Subtype'));
+            if (subtype !== PDFName.of('Widget')) kept.push(entry);
+          }
+          continue;
+        }
+        const dict = pdfDoc.context.lookupMaybe(entry, PDFDict);
+        if (!dict) continue; // dangling ref — drop
+        const subtype = dict.get(PDFName.of('Subtype'));
+        if (subtype !== PDFName.of('Widget')) {
+          kept.push(entry);
+        }
+      }
+
+      if (kept.size() === 0) {
+        page.node.delete(PDFName.of('Annots'));
+      } else {
+        page.node.set(PDFName.of('Annots'), kept);
+      }
+    } catch {
+      // leave page annots alone if structure is too broken
+    }
+  }
+}
+
+/**
+ * Draw filled values as permanent page ink so ANY PDF viewer (browser,
+ * Preview, etc.) matches the editor's fitted box + typography.
+ */
+function drawFilledFormFields(
+  pdfDoc: PDFDocument,
+  formFields: FormField[],
+  font: PDFFont,
+): void {
+  const pages = pdfDoc.getPages();
+  for (const field of formFields) {
+    const page = pages[field.pageIndex];
+    if (!page) continue;
+    const layout = field;
+    const pageHeight = page.getHeight();
+    const pdfY = toPdfY(pageHeight, layout.rect.y, layout.rect.height);
+
+    if (field.type === 'checkbox') {
+      const on =
+        field.value === 'true' ||
+        field.value === 'Yes' ||
+        field.value === '1' ||
+        field.value === 'on';
+      if (!on && !field.synthetic) continue;
+      if (field.synthetic) {
+        page.drawRectangle({
+          x: layout.rect.x,
+          y: pdfY,
+          width: layout.rect.width,
+          height: layout.rect.height,
+          borderColor: rgb(0.1, 0.1, 0.1),
+          borderWidth: 1,
+          color: rgb(1, 1, 1),
+        });
+      }
+      if (on) {
+        const mark = Math.min(
+          12,
+          Math.max(8, Math.min(layout.rect.width, layout.rect.height) * 0.75),
+        );
+        page.drawText('X', {
+          x: layout.rect.x + Math.max(1, (layout.rect.width - mark * 0.6) / 2),
+          y: pdfY + Math.max(1, (layout.rect.height - mark) / 2),
+          size: mark,
+          font,
+          color: rgb(0, 0, 0),
+        });
+      }
+      continue;
+    }
+
+    if (field.type === 'signature' && field.value.startsWith('data:image/')) {
+      continue;
+    }
+
+    if (field.value.startsWith('data:image/')) continue;
+
+    const text = field.value?.trim();
+    if (!text) continue;
+    const safe = text.replace(/[^\x09\x0A\x0D\x20-\x7E]/g, '?');
+    const maxWidth = Math.max(8, layout.rect.width - 4);
+    const size = fitFormFieldFontSize(layout.rect, safe, font);
+    const lineHeight = size * 1.2;
+    const lines = wrapTextToWidth(safe, font, size, maxWidth);
+    const maxLines = Math.max(1, Math.floor(layout.rect.height / lineHeight));
+    // Left + top of the same fitted rect the editor uses (not AcroForm center)
+    let cursorY = pdfY + layout.rect.height - size - 2;
+    for (let i = 0; i < Math.min(lines.length, maxLines); i++) {
+      const line = lines[i];
+      if (line === undefined) continue;
+      page.drawText(line, {
+        x: layout.rect.x + 2,
+        y: cursorY,
+        size,
+        font,
+        color: rgb(0, 0, 0),
+      });
+      cursorY -= lineHeight;
+      if (cursorY < pdfY - 1) break;
+    }
+  }
 }
 
 /**
@@ -507,9 +518,9 @@ function drawOverlay(
 }
 
 /**
- * Build a new PDF by applying AcroForm values and drawing overlays.
- * Filled wording is baked into page content so browser/OS viewers show it.
- * Overlay coordinates are top-left origin; PDF uses bottom-left.
+ * Build a new PDF by drawing fill ink at the editor's fitted boxes, then
+ * stripping AcroForm widgets (never flatten — that bakes auto-sized/centered
+ * appearances). Overlay coordinates are top-left; PDF uses bottom-left.
  */
 export async function buildPdfWithEdits(
   originalBytes: Uint8Array,
@@ -521,25 +532,12 @@ export async function buildPdfWithEdits(
     updateMetadata: false,
   });
 
-  await applyFormValues(pdfDoc, formFields);
-
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
-  // Refresh AcroForm appearance streams so values aren't "invisible" to viewers
-  let flattened = false;
-  try {
-    const form = pdfDoc.getForm();
-    form.updateFieldAppearances(font);
-    // Flatten → values become permanent page ink (survive any PDF viewer)
-    form.flatten();
-    flattened = true;
-  } catch {
-    // Some broken forms refuse flatten — still bake synthetic + draw fallbacks
-  }
-
-  // Smart Fill fields (no AcroForm widget) always need ink drawn
-  // If flatten failed, also bake native field values so wording isn't lost
-  drawFilledFormFields(pdfDoc, formFields, font, flattened);
+  // WYSIWYG ink first — same rects/sizes as FormOverlay
+  drawFilledFormFields(pdfDoc, formFields, font);
+  // Drop widgets without getForm/removeField (those crash on broken /AP refs)
+  stripAcroFormSafely(pdfDoc);
 
   const pages = pdfDoc.getPages();
   const imageCache = new Map<
@@ -613,7 +611,12 @@ export async function buildPdfWithEdits(
     drawOverlay(page, overlay, font, fonts, imageCache);
   }
 
-  const saved = await pdfDoc.save({ useObjectStreams: false });
+  // Never updateFieldAppearances — employment forms have dangling AP refs
+  // that throw "Expected instance of PDFDict or PDFStream, but got undefined"
+  const saved = await pdfDoc.save({
+    useObjectStreams: false,
+    updateFieldAppearances: false,
+  });
   return saved;
 }
 

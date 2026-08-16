@@ -18,6 +18,37 @@ export type ChangelogRelease = {
  */
 export const CHANGELOG: readonly ChangelogRelease[] = [
   {
+    version: '1.4.4',
+    title: 'Form fill that matches what you see',
+    date: '2026-08-17',
+    items: [
+      {
+        kind: 'fixed',
+        text: 'Saved form text no longer blows up huge or centers oddly in browser PDF viewers',
+      },
+      {
+        kind: 'fixed',
+        text: 'Fill boxes stay clear of printed titles (e.g. Dates of Employment) instead of covering labels',
+      },
+      {
+        kind: 'fixed',
+        text: 'Filled values stay visible in View mode — same as Add Text overlays',
+      },
+      {
+        kind: 'fixed',
+        text: 'Save no longer fails on forms with broken AcroForm appearance streams',
+      },
+      {
+        kind: 'improved',
+        text: 'Dark scanned pages no longer flip white/dark when zooming',
+      },
+      {
+        kind: 'improved',
+        text: 'Narrow date cells shrink type size so full dates fit instead of clipping',
+      },
+    ],
+  },
+  {
     version: '1.4.3',
     title: 'In-app updates only',
     date: '2026-08-17',

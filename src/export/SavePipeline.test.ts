@@ -256,10 +256,79 @@ describe('buildPdfWithEdits form persistence', () => {
     const out = await buildPdfWithEdits(original, [], formFields);
     expect(out.byteLength).toBeGreaterThan(100);
 
-    // Flattened — no live widgets; wording is page ink
+    // Widgets stripped — wording is page ink only
     const reopened = await PDFDocument.load(out);
     expect(reopened.getForm().getFields()).toHaveLength(0);
     expect(await extractPageText(out)).toContain('ACME SHIPPING CO');
+  });
+
+  it('does not bake AcroForm auto-size (huge) or centered appearances', async () => {
+    const { buildPdfWithEdits } = await import('./SavePipeline.ts');
+    const src = await PDFDocument.create();
+    const page = src.addPage([612, 792]);
+    const form = src.getForm();
+    // Tall widget: pdf-lib auto appearance ≈ 29pt without setFontSize
+    const tf = form.createTextField('School');
+    tf.addToPage(page, { x: 72, y: 650, width: 280, height: 36 });
+    tf.setText('IGNORE-ME'); // would flatten huge/centered if we trusted AP
+    const font = await src.embedFont(StandardFonts.Helvetica);
+    form.updateFieldAppearances(font);
+    const original = await src.save();
+
+    const formFields: FormField[] = [
+      {
+        id: 'f1',
+        name: 'School',
+        type: 'text',
+        pageIndex: 0,
+        // Fitted editor box (top-left origin): same page area as widget
+        rect: { x: 72, y: 106, width: 280, height: 36 },
+        value: 'Saipan Southern High School',
+      },
+    ];
+
+    const out = await buildPdfWithEdits(original, [], formFields);
+    const doc = await pdfjs
+      .getDocument({ data: out.slice(), useSystemFonts: true })
+      .promise;
+    const p = await doc.getPage(1);
+    const content = await p.getTextContent();
+    const hits = content.items.filter(
+      (item): item is { str: string; transform: number[] } =>
+        'str' in item &&
+        typeof item.str === 'string' &&
+        item.str.includes('Saipan'),
+    );
+    expect(hits.length).toBeGreaterThan(0);
+    for (const item of hits) {
+      const fontSize = Math.hypot(item.transform[2]!, item.transform[3]!);
+      expect(fontSize).toBeLessThanOrEqual(11);
+      expect(fontSize).toBeGreaterThanOrEqual(6);
+      // Left-aligned in the fitted box (not horizontally centered ~x=160+)
+      expect(item.transform[4]!).toBeLessThan(90);
+    }
+    expect(await extractPageText(out)).not.toContain('IGNORE-ME');
+  });
+
+  it('shrinks font so narrow date cells keep full text', async () => {
+    const { buildPdfWithEdits } = await import('./SavePipeline.ts');
+    const original = await makeMinimalPdf();
+    const formFields: FormField[] = [
+      {
+        id: 'd1',
+        name: 'DateCompleted',
+        type: 'text',
+        pageIndex: 0,
+        rect: { x: 400, y: 200, width: 72, height: 18 },
+        value: '2023 & 2025',
+        synthetic: true,
+      },
+    ];
+    const out = await buildPdfWithEdits(original, [], formFields);
+    const text = await extractPageText(out);
+    expect(text).toContain('2023');
+    expect(text).toContain('2025');
+    expect(text).not.toMatch(/023 & 202(?!5)/);
   });
 
   it('bakes synthetic Smart Fill text even without AcroForm widgets', async () => {
@@ -278,5 +347,44 @@ describe('buildPdfWithEdits form persistence', () => {
     ];
     const out = await buildPdfWithEdits(original, [], formFields);
     expect(await extractPageText(out)).toContain('Jane Consignee');
+  });
+
+  it('saves even when AcroForm widget appearance refs are missing', async () => {
+    const { buildPdfWithEdits } = await import('./SavePipeline.ts');
+    const { PDFRef } = await import('pdf-lib');
+    const src = await PDFDocument.create();
+    const page = src.addPage([612, 792]);
+    const form = src.getForm();
+    const tf = form.createTextField('City');
+    tf.addToPage(page, { x: 72, y: 700, width: 120, height: 36 });
+    tf.setText('x');
+    const font = await src.embedFont(StandardFonts.Helvetica);
+    form.updateFieldAppearances(font);
+    const intact = await src.save();
+
+    const brokenDoc = await PDFDocument.load(intact);
+    const widget = brokenDoc
+      .getForm()
+      .getTextField('City')
+      .acroField.getWidgets()[0]!;
+    const ap = widget.getNormalAppearance();
+    if (ap instanceof PDFRef) {
+      brokenDoc.context.delete(ap);
+    }
+    const brokenBytes = await brokenDoc.save({
+      updateFieldAppearances: false,
+    });
+
+    const out = await buildPdfWithEdits(brokenBytes, [], [
+      {
+        id: 'f1',
+        name: 'City',
+        type: 'text',
+        pageIndex: 0,
+        rect: { x: 72, y: 56, width: 120, height: 36 },
+        value: 'Saipan',
+      },
+    ]);
+    expect(await extractPageText(out)).toContain('Saipan');
   });
 });

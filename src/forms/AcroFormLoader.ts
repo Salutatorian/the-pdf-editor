@@ -1,4 +1,10 @@
-import { PDFDocument, PDFName, PDFRef } from 'pdf-lib';
+import {
+  PDFArray,
+  PDFDict,
+  PDFDocument,
+  PDFName,
+  PDFRef,
+} from 'pdf-lib';
 import { v4 as uuidv4 } from 'uuid';
 import type { FormField, FormFieldType } from '../document/types.ts';
 import { normalizeFieldType } from './SmartFill.ts';
@@ -25,11 +31,18 @@ function inferTypeFromName(name: string, base: FormFieldType): FormFieldType {
   return base;
 }
 
+/** AcroForm field names must never appear as gray ghost text on the page. */
+export function acroFormPlaceholder(
+  _name: string,
+  _type: FormFieldType,
+): string {
+  return '';
+}
+
 type WidgetLike = {
+  ref?: PDFRef;
+  dict?: PDFDict;
   getRectangle: () => { x: number; y: number; width: number; height: number };
-  dict?: {
-    lookupMaybe: (name: unknown, type: unknown) => unknown;
-  };
 };
 
 type AcroFieldLike = {
@@ -49,11 +62,10 @@ function getWidgets(field: unknown): WidgetLike[] {
   }
 }
 
-function pageIndexForWidget(
+function pageIndexFromPRef(
   pages: ReturnType<PDFDocument['getPages']>,
   widget: WidgetLike,
-  fallbackY: number,
-): number {
+): number | null {
   try {
     const pageRef = widget.dict?.lookupMaybe?.(PDFName.of('P'), PDFRef);
     if (pageRef) {
@@ -63,20 +75,68 @@ function pageIndexForWidget(
   } catch {
     // fall through
   }
+  return null;
+}
 
-  // Fallback: first page whose height contains the widget bottom-left Y
-  for (let i = 0; i < pages.length; i++) {
-    const ph = pages[i]!.getHeight();
-    if (fallbackY >= -2 && fallbackY <= ph + 2) return i;
+function resolveWidgetRef(
+  pdfDoc: PDFDocument,
+  widget: WidgetLike,
+): PDFRef | null {
+  if (widget.ref instanceof PDFRef) return widget.ref;
+  if (widget.dict) {
+    try {
+      const found = pdfDoc.context.getObjectRef(widget.dict);
+      if (found instanceof PDFRef) return found;
+    } catch {
+      // fall through
+    }
   }
-  return 0;
+  return null;
+}
+
+/** Find which page's /Annots array references this widget (correct page for orphan widgets). */
+function pageIndexFromAnnots(
+  pages: ReturnType<PDFDocument['getPages']>,
+  target: PDFRef,
+): number | null {
+  for (let i = 0; i < pages.length; i++) {
+    try {
+      const annots = pages[i]!.node.lookupMaybe(PDFName.of('Annots'), PDFArray);
+      if (!annots) continue;
+      for (let j = 0; j < annots.size(); j++) {
+        const entry = annots.get(j);
+        if (entry === target) return i;
+        if (
+          entry instanceof PDFRef &&
+          entry.objectNumber === target.objectNumber &&
+          entry.generationNumber === target.generationNumber
+        ) {
+          return i;
+        }
+      }
+    } catch {
+      // keep searching
+    }
+  }
+  return null;
+}
+
+function pageIndexForWidget(
+  pdfDoc: PDFDocument,
+  pages: ReturnType<PDFDocument['getPages']>,
+  widget: WidgetLike,
+): number | null {
+  const fromP = pageIndexFromPRef(pages, widget);
+  if (fromP !== null) return fromP;
+  const ref = resolveWidgetRef(pdfDoc, widget);
+  if (!ref) return null;
+  return pageIndexFromAnnots(pages, ref);
 }
 
 function widgetToTopLeftRect(
   page: ReturnType<PDFDocument['getPages']>[number],
   wr: { x: number; y: number; width: number; height: number },
 ): { x: number; y: number; width: number; height: number } {
-  // Match pdf.js view: CropBox is the visible page (MediaBox can be offset)
   const box =
     typeof page.getCropBox === 'function' ? page.getCropBox() : page.getMediaBox();
   return {
@@ -90,11 +150,11 @@ function widgetToTopLeftRect(
 /**
  * Load AcroForm fields from PDF bytes into app `FormField` models.
  * Emits one FormField per widget (radio/checkbox groups included).
+ * Widgets whose page cannot be resolved are skipped (never dumped onto page 1).
  */
 export async function loadAcroFormFields(
   pdfBytes: Uint8Array,
 ): Promise<FormField[]> {
-  // Defensive copy — callers may pass buffers pdf.js later mutates
   const data = pdfBytes.slice();
   const pdfDoc = await PDFDocument.load(data, {
     ignoreEncryption: true,
@@ -164,31 +224,21 @@ export async function loadAcroFormFields(
 
     const widgets = getWidgets(field);
     if (widgets.length === 0) {
-      results.push({
-        id: uuidv4(),
-        name,
-        type,
-        pageIndex: 0,
-        rect: { x: 0, y: 0, width: 100, height: 20 },
-        value,
-        options,
-        readOnly,
-        groupName,
-        placeholder: name.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim(),
-      });
+      // No drawable widget — skip (used to invent a fake page-1 box)
       continue;
     }
 
     widgets.forEach((widget, widgetIndex) => {
       try {
         const wr = widget.getRectangle();
-        const pageIndex = pageIndexForWidget(pages, widget, wr.y);
-        const page = pages[pageIndex] ?? pages[0]!;
+        const pageIndex = pageIndexForWidget(pdfDoc, pages, widget);
+        if (pageIndex === null) {
+          // Do NOT fall back to page 0 — that painted every field on page 1
+          return;
+        }
+        const page = pages[pageIndex];
+        if (!page) return;
         const rect = widgetToTopLeftRect(page, wr);
-        // Keep real widget size — printed checkbox/line is the guide; don't shrink
-        const placeholder = /^text\d+$/i.test(name)
-          ? ''
-          : name.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
 
         results.push({
           id: uuidv4(),
@@ -200,7 +250,7 @@ export async function loadAcroFormFields(
           options,
           readOnly,
           groupName: groupName ?? (widgets.length > 1 ? name : undefined),
-          placeholder,
+          placeholder: acroFormPlaceholder(name, type),
         });
       } catch {
         // skip broken widget

@@ -5,6 +5,8 @@ import type {
   FormFieldType,
   SmartFillSuggestion,
 } from '../document/types.ts';
+import type { DrawnBox } from './detectDrawnBoxes.ts';
+import { shrinkFieldAwayFromPrintedText } from './fitFieldAwayFromPrintedText.ts';
 
 export type TextItemHint = {
   str: string;
@@ -79,6 +81,17 @@ const CHECKBOX_WORD_LABELS = [
   'willcall',
   'prepaid',
   'collect',
+  'comp',
+  'incomp',
+  'complete',
+  'incomplete',
+  'speak',
+  'read',
+  'write',
+  'understand',
+  'male',
+  'female',
+  'other',
 ];
 
 /** Longer shipping-option phrases (printed box sits left of the label). */
@@ -93,6 +106,13 @@ const CHECKBOX_PHRASE_RES: RegExp[] = [
   /\bdelivery\b/i,
   /\bocean\b/i,
   /\bair\b/i,
+  /employment\s+application/i,
+  /cover\s+letter/i,
+  /resume/i,
+  /diploma/i,
+  /transcript/i,
+  /police\s+clearance/i,
+  /legal\s+right/i,
 ];
 
 function isCheckboxOptionLabel(label: string): boolean {
@@ -140,7 +160,7 @@ export function rectsOverlap(a: FormFieldRect, b: FormFieldRect): boolean {
 export function isCheckboxSizedRect(rect: FormFieldRect): boolean {
   const maxSide = Math.max(rect.width, rect.height);
   const minSide = Math.min(rect.width, rect.height);
-  if (maxSide <= 0 || maxSide > 26) return false;
+  if (maxSide <= 0 || maxSide > 32) return false;
   return minSide / maxSide >= 0.55;
 }
 
@@ -160,6 +180,29 @@ function coerceCheckboxValue(value: string): string {
     return 'true';
   }
   return 'false';
+}
+
+/**
+ * Weak fallback when page text isn't available yet.
+ * Prefer shrinkFieldAwayFromPrintedText (real titles inside the cell).
+ */
+export function insetTextFieldFromLabelBand(field: FormField): FormField {
+  if (field.type !== 'text' && field.type !== 'date') return field;
+  const { height, width } = field.rect;
+  if (height < 40) return field;
+  if (height <= 48 && width >= height * 5) return field;
+  // Tiny reserve only — real titles are handled by shrinkFieldAwayFromPrintedText
+  const topInset = Math.min(14, Math.max(10, Math.round(height * 0.1)));
+  const newHeight = height - topInset - 2;
+  if (newHeight < 12) return field;
+  return {
+    ...field,
+    rect: {
+      ...field.rect,
+      y: field.rect.y + topInset,
+      height: newHeight,
+    },
+  };
 }
 
 /**
@@ -195,19 +238,21 @@ export function normalizeFieldType(field: FormField): FormField {
   }
 
   // Narrow leftovers shouldn't show truncated garbage placeholders ("pre…")
+  let next = field;
   if (
     field.type === 'text' &&
     field.rect.width < 40 &&
     field.placeholder &&
     field.placeholder.length > 2
   ) {
-    return { ...field, placeholder: '' };
+    next = { ...field, placeholder: '' };
   }
 
-  return field;
+  // Title-band inset is handled by shrinkFieldAwayFromPrintedText (page text)
+  return next;
 }
 
-/** True when two rects are the same control (overlap, same row, or tiny checkbox neighbors). */
+/** True when two rects are the same control (overlap / stacked duplicates). */
 export function fieldsClash(a: FormFieldRect, b: FormFieldRect): boolean {
   const overlapW = Math.max(
     0,
@@ -224,22 +269,31 @@ export function fieldsClash(a: FormFieldRect, b: FormFieldRect): boolean {
   if (overlapArea > 0) {
     const iou = overlapArea / (areaA + areaB - overlapArea);
     if (iou >= 0.18) return true;
-    const minH = Math.min(a.height, b.height);
-    const midA = a.y + a.height / 2;
-    const midB = b.y + b.height / 2;
-    if (Math.abs(midA - midB) <= minH * 0.8) {
-      const minW = Math.min(a.width, b.width);
-      if (overlapW >= minW * 0.35) return true;
+    // Same-row partial overlap — for wide text cells, not checkbox grids
+    const bothCheckboxSized =
+      Math.max(a.width, a.height) <= 28 &&
+      Math.max(b.width, b.height) <= 28 &&
+      Math.min(a.width, a.height) / Math.max(a.width, a.height) >= 0.55 &&
+      Math.min(b.width, b.height) / Math.max(b.width, b.height) >= 0.55;
+    if (!bothCheckboxSized) {
+      const minH = Math.min(a.height, b.height);
+      const midA = a.y + a.height / 2;
+      const midB = b.y + b.height / 2;
+      if (Math.abs(midA - midB) <= minH * 0.8) {
+        const minW = Math.min(a.width, b.width);
+        if (overlapW >= minW * 0.35) return true;
+      }
     }
   }
 
-  // Nearby checkbox-sized hits
+  // Stacked duplicates only — language grids sit ~16–30px apart and must stay.
   const acx = a.x + a.width / 2;
   const acy = a.y + a.height / 2;
   const bcx = b.x + b.width / 2;
   const bcy = b.y + b.height / 2;
-  const bothSmall = a.width <= 28 && a.height <= 28 && b.width <= 28 && b.height <= 28;
-  if (bothSmall && Math.hypot(acx - bcx, acy - bcy) < 20) return true;
+  const bothSmall =
+    a.width <= 28 && a.height <= 28 && b.width <= 28 && b.height <= 28;
+  if (bothSmall && Math.hypot(acx - bcx, acy - bcy) < 8) return true;
 
   return false;
 }
@@ -407,46 +461,226 @@ function hasFilledValueBesideLabel(
 }
 
 /**
- * Only offer a labeled fillable when there is a visible blank/underline to write in.
- * Never invent fields on plain labels (e.g. "Note:") or already-filled lines.
+ * Prefer a blank/underline. Optionally use empty gap to the right (table cells
+ * without underscore glyphs). Keep allowGap off for signature so we don't
+ * invent huge sign areas from a lone "Signature:" label.
  */
 function blankFillRectForLabel(
   items: TextItemHint[],
   pageHeight: number,
+  pageWidth: number,
   labelItem: TextItemHint,
   minWidth: number,
   height: number,
+  allowGap = true,
 ): FormFieldRect | null {
   const blank = findBlankToRightOfLabel(items, pageHeight, labelItem);
-  if (!blank) return null;
-  if (hasFilledValueBesideLabel(items, pageHeight, labelItem, blank)) {
+  if (blank) {
+    if (hasFilledValueBesideLabel(items, pageHeight, labelItem, blank)) {
+      return null;
+    }
+    const x = itemX(blank);
+    const y = itemYTop(blank, pageHeight) - 2;
+    return {
+      x,
+      y,
+      width: Math.max(minWidth, blank.width, 80),
+      height: Math.min(24, Math.max(height, blank.height + 6)),
+    };
+  }
+
+  if (!allowGap) return null;
+  // Gap fills are a last resort and often spill into the next column —
+  // keep them narrow.
+  if (hasFilledValueBesideLabel(items, pageHeight, labelItem, null)) {
     return null;
   }
-  const x = itemX(blank);
-  const y = itemYTop(blank, pageHeight) - 2;
+  const labelRight = itemX(labelItem) + labelItem.width;
+  const labelMidY = itemYTop(labelItem, pageHeight) + labelItem.height / 2;
+  let nextX = pageWidth - 18;
+  for (const item of items) {
+    if (item === labelItem) continue;
+    if (!sameTextRow(labelItem, item, pageHeight)) continue;
+    const x = itemX(item);
+    if (x < labelRight + 6) continue;
+    nextX = Math.min(nextX, x - 4);
+  }
+  const gap = nextX - (labelRight + 4);
+  if (gap < 40) return null;
+  const maxGap = Math.min(140, pageWidth * 0.28);
+  const width = Math.min(gap, maxGap);
+  if (width < 36) return null;
   return {
-    x,
-    y,
-    width: Math.max(minWidth, blank.width, 80),
-    height: Math.min(24, Math.max(height, blank.height + 6)),
+    x: labelRight + 4,
+    y: labelMidY - height / 2,
+    width,
+    height,
   };
 }
 
 /**
- * Heuristic Smart Fill detector for forms like shipping BOL sheets.
+ * Final safety pass: clip text fields so they never spill into the next
+ * box on the same row/column (the "overfilling" bug on ruled forms).
+ */
+export function clipSuggestionsToNeighbors(
+  suggestions: SmartFillSuggestion[],
+  pageWidth: number,
+): SmartFillSuggestion[] {
+  const pad = 3;
+  const result = suggestions.map((s) => ({
+    ...s,
+    rect: { ...s.rect },
+  }));
+
+  const isTextual = (s: SmartFillSuggestion) =>
+    s.kind === 'text' || s.kind === 'date' || s.kind === 'signature';
+
+  const texts = result.filter(isTextual);
+  const used = new Set<string>();
+
+  // Horizontal: shrink width so we stop before the next field on the row
+  for (const s of texts) {
+    if (used.has(s.id)) continue;
+    const midY = s.rect.y + s.rect.height / 2;
+    const row = texts
+      .filter((o) => Math.abs(o.rect.y + o.rect.height / 2 - midY) <= 12)
+      .sort((a, b) => a.rect.x - b.rect.x);
+    for (const r of row) used.add(r.id);
+
+    for (let i = 0; i < row.length; i++) {
+      const cur = row[i]!;
+      const next = row[i + 1];
+      let maxRight = pageWidth - 8;
+      if (next) maxRight = Math.min(maxRight, next.rect.x - pad);
+      cur.rect.width = Math.min(cur.rect.width, Math.max(8, maxRight - cur.rect.x));
+      if (cur.kind !== 'signature') {
+        cur.rect.width = Math.min(cur.rect.width, pageWidth * 0.4);
+      }
+      cur.rect.height = Math.min(
+        cur.rect.height,
+        cur.kind === 'signature' ? 48 : 22,
+      );
+    }
+  }
+
+  // Vertical: shrink height so we stop before the next field below
+  used.clear();
+  for (const s of texts) {
+    if (used.has(s.id)) continue;
+    const midX = s.rect.x + s.rect.width / 2;
+    const col = texts
+      .filter((o) => Math.abs(o.rect.x + o.rect.width / 2 - midX) <= 20)
+      .sort((a, b) => a.rect.y - b.rect.y);
+    for (const c of col) used.add(c.id);
+
+    for (let i = 0; i < col.length; i++) {
+      const cur = col[i]!;
+      const next = col[i + 1];
+      if (!next) continue;
+      const maxBottom = next.rect.y - pad;
+      cur.rect.height = Math.min(
+        cur.rect.height,
+        Math.max(8, maxBottom - cur.rect.y),
+      );
+    }
+  }
+
+  return result.filter((s) => {
+    if (!isTextual(s)) return true;
+    return s.rect.width >= 12 && s.rect.height >= 8;
+  });
+}
+
+/**
+ * Heuristic Smart Fill detector for forms like shipping BOL sheets and
+ * employment applications (ruled cells + drawn checkboxes).
  * Returns suggestions only — never mutates the document.
- * Text / date / signature require a real blank/underline line — no ghost fields.
  */
 export function detectSmartFillSuggestions(
-  _pageWidth: number,
+  pageWidth: number,
   pageHeight: number,
   pageIndex: number,
   textItems?: TextItemHint[],
+  drawnBoxes?: DrawnBox[],
 ): SmartFillSuggestion[] {
   const suggestions: SmartFillSuggestion[] = [];
   const items = textItems ?? [];
+  const boxes = drawnBoxes ?? [];
+  // When the page has ruled cells, skip gap-from-label (major overfill source)
+  const allowLabelGaps = boxes.length < 3;
 
-  // 1) Labeled fill lines — only when a blank/underline sits to the right
+  // 0) Vector-drawn cells / checkbox squares (primary for table-style PDFs)
+  for (const box of boxes) {
+    if (box.kind === 'checkbox') {
+      suggestions.push({
+        id: uuidv4(),
+        kind: 'checkbox',
+        pageIndex,
+        rect: {
+          x: box.x,
+          y: box.y,
+          width: box.width,
+          height: box.height,
+        },
+        confidence: 0.92,
+        label: 'Checkbox',
+        confirmed: false,
+      });
+      continue;
+    }
+    // Prefer type-in area below/beside any printed title inside the cell
+    const inset = 2.5;
+    const provisional = {
+      id: 'tmp',
+      name: 'Blank field',
+      type: 'text' as const,
+      pageIndex,
+      rect: {
+        x: box.x + inset,
+        y: box.y + inset,
+        width: Math.max(16, box.width - inset * 2),
+        height: Math.max(12, box.height - inset * 2),
+      },
+      value: '',
+    };
+    const printedInBox = items
+      .map((item) => {
+        const t = normalizeLabel(item.str);
+        if (!t || isBlankLineText(t)) return null;
+        return {
+          str: t,
+          x: itemX(item),
+          y: itemYTop(item, pageHeight),
+          width: item.width,
+          height: Math.max(item.height, 6),
+        };
+      })
+      .filter((t): t is NonNullable<typeof t> => t !== null);
+    // Skip only if the cell is mostly filled body text (not just a title band)
+    const bodyText = printedInBox.filter((t) => {
+      const cy = t.y + t.height / 2;
+      return cy > box.y + Math.max(18, box.height * 0.35);
+    });
+    if (bodyText.length >= 3) continue;
+
+    const fitted = shrinkFieldAwayFromPrintedText(
+      provisional,
+      printedInBox,
+      [box],
+    );
+    if (fitted.rect.height < 10 || fitted.rect.width < 16) continue;
+    suggestions.push({
+      id: uuidv4(),
+      kind: 'text',
+      pageIndex,
+      rect: fitted.rect,
+      confidence: 0.7,
+      label: 'Blank field',
+      confirmed: false,
+    });
+  }
+
+  // 1) Labeled fill lines — blank/underline OR empty gap to the right
   for (const item of items) {
     const label = normalizeLabel(item.str);
     if (!label) continue;
@@ -458,6 +692,7 @@ export function detectSmartFillSuggestions(
     const genericColon =
       !matched &&
       /^[A-Za-z][A-Za-z0-9 /&#-]{1,40}:\s*$/.test(label) &&
+      label.length <= 36 &&
       !isSignatureLabel(lower) &&
       !isDateLabel(lower);
 
@@ -468,9 +703,11 @@ export function detectSmartFillSuggestions(
     const rect = blankFillRectForLabel(
       items,
       pageHeight,
+      pageWidth,
       item,
       minWidth,
       height,
+      allowLabelGaps,
     );
     if (!rect) continue;
 
@@ -518,14 +755,22 @@ export function detectSmartFillSuggestions(
     });
   }
 
-  // 3) Signature / date — only with a blank line to write on
+  // 3) Signature / date — blank line or gap
   for (const item of items) {
     const label = normalizeLabel(item.str);
     const lower = label.toLowerCase();
     if (NON_FILL_LABEL_RE.test(label)) continue;
 
     if (isSignatureLabel(lower)) {
-      const rect = blankFillRectForLabel(items, pageHeight, item, 160, 36);
+      const rect = blankFillRectForLabel(
+        items,
+        pageHeight,
+        pageWidth,
+        item,
+        160,
+        36,
+        false,
+      );
       if (rect) {
         suggestions.push({
           id: uuidv4(),
@@ -542,7 +787,15 @@ export function detectSmartFillSuggestions(
     }
 
     if (isDateLabel(lower) && !isSignatureLabel(lower)) {
-      const rect = blankFillRectForLabel(items, pageHeight, item, 100, 22);
+      const rect = blankFillRectForLabel(
+        items,
+        pageHeight,
+        pageWidth,
+        item,
+        100,
+        22,
+        false,
+      );
       if (rect) {
         suggestions.push({
           id: uuidv4(),
@@ -557,9 +810,10 @@ export function detectSmartFillSuggestions(
     }
   }
 
-  // 4) Checkboxes — only real box glyphs, OR a small square left of known option words.
-  const BOX_GLYPHS = new Set(['□', '☐', '▢', '◻', '❏', '❐', '❑', '❒', '☑', '☒']);
+  // 4) Checkboxes — glyphs, OR option words with a box to the left (or right)
+  const BOX_GLYPHS = new Set(['□', '☐', '▢', '◻', '❏', '❐', '❑', '❒', '☑', '☒', '■', '□']);
   const checkboxHits: SmartFillSuggestion[] = [];
+  const drawnChecks = (drawnBoxes ?? []).filter((b) => b.kind === 'checkbox');
 
   for (const item of items) {
     const label = normalizeLabel(item.str);
@@ -567,7 +821,7 @@ export function detectSmartFillSuggestions(
     const x = itemX(item);
     const y = itemYTop(item, pageHeight);
 
-    if (BOX_GLYPHS.has(label)) {
+    if (BOX_GLYPHS.has(label) || /^[\[\(]\s*[\]\)]$/.test(label)) {
       checkboxHits.push({
         id: uuidv4(),
         kind: 'checkbox',
@@ -575,8 +829,8 @@ export function detectSmartFillSuggestions(
         rect: {
           x,
           y: y + Math.max(0, (item.height - 14) / 2),
-          width: 14,
-          height: 14,
+          width: Math.max(12, Math.min(18, item.width || 14)),
+          height: Math.max(12, Math.min(18, item.height || 14)),
         },
         confidence: 0.9,
         label: 'Checkbox',
@@ -585,23 +839,50 @@ export function detectSmartFillSuggestions(
       continue;
     }
 
-    const wordKey = lower.replace(/[^a-z ]/g, '').trim();
-    if (isCheckboxOptionLabel(label)) {
+    if (!isCheckboxOptionLabel(label)) continue;
+
+    // Prefer a real drawn square beside the label when available
+    const labelCx = x + item.width / 2;
+    const labelCy = y + item.height / 2;
+    const nearDrawn = drawnChecks.find((b) => {
+      const bx = b.x + b.width / 2;
+      const by = b.y + b.height / 2;
+      const dx = bx - labelCx;
+      const dy = by - labelCy;
+      return Math.abs(dy) <= Math.max(14, item.height) && Math.abs(dx) <= 36;
+    });
+    if (nearDrawn) {
       checkboxHits.push({
         id: uuidv4(),
         kind: 'checkbox',
         pageIndex,
         rect: {
-          x: Math.max(4, x - 18),
-          y: y + (item.height - 14) / 2,
-          width: 14,
-          height: 14,
+          x: nearDrawn.x,
+          y: nearDrawn.y,
+          width: nearDrawn.width,
+          height: nearDrawn.height,
         },
-        confidence: 0.8,
-        label: wordKey || label,
+        confidence: 0.92,
+        label: lower.replace(/[^a-z ]/g, '').trim() || label,
         confirmed: false,
       });
+      continue;
     }
+
+    checkboxHits.push({
+      id: uuidv4(),
+      kind: 'checkbox',
+      pageIndex,
+      rect: {
+        x: Math.max(4, x - 18),
+        y: y + (item.height - 14) / 2,
+        width: 14,
+        height: 14,
+      },
+      confidence: 0.8,
+      label: lower.replace(/[^a-z ]/g, '').trim() || label,
+      confirmed: false,
+    });
   }
 
   suggestions.push(...checkboxHits);
@@ -645,7 +926,7 @@ export function detectSmartFillSuggestions(
     });
   }
 
-  // Deduplicate — prefer checkboxes over text when they clash (avoids "pre" typing in boxes)
+  // Deduplicate — prefer checkboxes over text when they clash
   const suggestionPriority = (s: SmartFillSuggestion): number => {
     const kindBoost =
       s.kind === 'checkbox' || s.kind === 'radio'
@@ -655,9 +936,14 @@ export function detectSmartFillSuggestions(
           : 0;
     return kindBoost + s.confidence;
   };
-  const sorted = [...suggestions].sort(
-    (a, b) => suggestionPriority(b) - suggestionPriority(a),
-  );
+  const sorted = [...suggestions].sort((a, b) => {
+    const pd = suggestionPriority(b) - suggestionPriority(a);
+    if (Math.abs(pd) > 0.05) return pd > 0 ? 1 : -1;
+    // Same tier → keep the tighter box (avoids overfilling table cells)
+    return (
+      a.rect.width * a.rect.height - b.rect.width * b.rect.height
+    );
+  });
   const kept: SmartFillSuggestion[] = [];
   for (const s of sorted) {
     if (kept.some((k) => fieldsClash(k.rect, s.rect))) continue;
@@ -670,28 +956,31 @@ export function detectSmartFillSuggestions(
       next = { ...next, kind: 'checkbox', label: next.label ?? 'Checkbox' };
     }
     if (next.kind === 'text' || next.kind === 'date') {
-      next = {
-        ...next,
-        rect: {
-          ...next.rect,
-          height: Math.min(next.rect.height, 24),
-        },
-      };
+      // Keep taller drawn answer cells; only clamp underscore-style shorts
+      if (next.rect.height <= 32) {
+        next = {
+          ...next,
+          rect: {
+            ...next.rect,
+            height: Math.min(next.rect.height, 28),
+          },
+        };
+      }
     }
     if (next.kind === 'checkbox') {
       next = {
         ...next,
         rect: {
           ...next.rect,
-          width: Math.min(next.rect.width, 18),
-          height: Math.min(next.rect.height, 18),
+          width: Math.min(Math.max(next.rect.width, 10), 22),
+          height: Math.min(Math.max(next.rect.height, 10), 22),
         },
       };
     }
     kept.push({ ...next, confirmed: false });
   }
 
-  return kept;
+  return clipSuggestionsToNeighbors(kept, pageWidth);
 }
 
 /** Map a Smart Fill suggestion to a typeable FormField (synthetic — drawn on export). */

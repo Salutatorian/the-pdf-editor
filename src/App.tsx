@@ -57,6 +57,7 @@ import {
   filterSuggestionsAgainstFields,
   type TextItemHint,
 } from './forms/SmartFill.ts';
+import { detectDrawnBoxes } from './forms/detectDrawnBoxes.ts';
 import {
   saveAs,
   verifiedSave,
@@ -255,7 +256,8 @@ function AppInner() {
   const viewerPageCount = pdfjsPageCount > 0 ? pdfjsPageCount : pageCount;
   const syncedRectsForGen = useRef<number | null>(null);
 
-  /** Lock fillable positions to pdf.js annotation geometry (survives zoom). */
+  /** Lock fillable positions to pdf.js annotation geometry (survives zoom).
+   * Also shrinks type-in rects away from printed titles using page text. */
   useEffect(() => {
     if (!doc || !documentGen) return;
     if (syncedRectsForGen.current === documentGen) return;
@@ -272,14 +274,18 @@ function AppInner() {
         const synced = await syncFormFieldRectsFromPdfJs(doc, fields);
         if (cancelled || docSessionRef.current !== session) return;
         const live = useDocumentStore.getState().formFields;
-        // Merge: keep live values / newly added fields; only take rects from sync
+        // Merge: keep live values / newly added fields; take fitted rects from sync
         const byId = new Map(synced.map((f) => [f.id, f]));
         const merged = live.map((f) => {
           const s = byId.get(f.id);
           if (!s) return f;
-          return { ...f, rect: s.rect, pageIndex: s.pageIndex };
+          return {
+            ...f,
+            rect: s.rect,
+            pageIndex: s.pageIndex,
+            placeholder: s.placeholder ?? '',
+          };
         });
-        // Include synced fields that were in the snapshot but somehow dropped
         for (const s of synced) {
           if (!merged.some((f) => f.id === s.id) && snapshotIds.has(s.id)) {
             const liveMatch = live.find((f) => f.id === s.id);
@@ -585,9 +591,28 @@ function AppInner() {
       const acroFields = await loadAcroFormFields(workingBytes);
       if (docSessionRef.current !== session) return;
 
-      // Sidecar form fields survive flatten; prefer them when present
-      const fields =
-        layer && layer.formFields.length > 0 ? layer.formFields : acroFields;
+      // Prefer live AcroForm geometry when the PDF already has a real form.
+      // Old sidecars could stash every field on page 1 (wrong page fallback) —
+      // keep typed values, but don't reuse those broken positions.
+      const sidecarFields = layer?.formFields ?? [];
+      let fields: FormField[];
+      if (acroFields.length >= 12) {
+        const valuesByName = new Map(
+          sidecarFields.map((f) => [f.name, f.value] as const),
+        );
+        fields = acroFields.map((f) => ({
+          ...f,
+          value: valuesByName.get(f.name) ?? f.value,
+          placeholder: '',
+        }));
+      } else if (sidecarFields.length > 0) {
+        fields = sidecarFields.map((f) => ({
+          ...f,
+          placeholder: /^smartfill:/i.test(f.name) ? f.placeholder : '',
+        }));
+      } else {
+        fields = acroFields;
+      }
 
       const metaDoc: DocumentMeta = {
         path,
@@ -988,12 +1013,23 @@ function AppInner() {
           height: item.height,
         });
       }
+      let drawn: Awaited<ReturnType<typeof detectDrawnBoxes>> = [];
+      try {
+        drawn = await detectDrawnBoxes(
+          page,
+          viewport.width,
+          viewport.height,
+        );
+      } catch (err) {
+        console.warn('Drawn box detection failed', err);
+      }
       all.push(
         ...detectSmartFillSuggestions(
           viewport.width,
           viewport.height,
           i,
           hints,
+          drawn,
         ),
       );
       // Yield so Open / UI stay responsive on multi-page PDFs
@@ -1035,15 +1071,21 @@ function AppInner() {
         return;
       }
 
+      // AcroForm present: still gap-fill empty ruled cells + checkboxes that
+      // the PDF didn't wire as widgets (Place of Employment, etc.).
       if (existingCount > 0) {
-        const gaps = suggestions.filter((s) => s.kind === 'checkbox');
+        const gaps = suggestions.filter((s) => {
+          if (s.kind === 'checkbox') return true;
+          // Empty text cells from drawn-box detection
+          return s.kind === 'text' && (s.label === 'Blank field' || !s.label);
+        });
         store.setSmartFillSuggestions(gaps);
         const n = store.acceptAllSmartFill();
         const total = useDocumentStore.getState().formFields.length;
         if (useDocumentStore.getState().mode === 'fill') {
           store.setStatus(
             n > 0
-              ? `Ready to fill · ${total} field(s) (+${n} checkbox${n === 1 ? '' : 'es'})`
+              ? `Ready to fill · ${total} field(s) (+${n} gap-filled)`
               : `Ready to fill · ${total} form field(s)`,
           );
         }
@@ -1051,7 +1093,7 @@ function AppInner() {
       }
 
       // Cap auto-accept so huge scans don't freeze the toolbar
-      const MAX_AUTO = 80;
+      const MAX_AUTO = 160;
       if (suggestions.length > MAX_AUTO) {
         store.setSmartFillSuggestions(suggestions.slice(0, MAX_AUTO));
         store.acceptAllSmartFill();
@@ -1087,9 +1129,31 @@ function AppInner() {
         autoFillPathRef.current = null;
         const session = docSessionRef.current;
         void (async () => {
+          const existingCount = useDocumentStore.getState().formFields.length;
           const suggestions = await runSmartFill();
           if (docSessionRef.current !== session) return;
-          if (suggestions) store.acceptAllSmartFill();
+          if (!suggestions) return;
+          if (existingCount >= 12) {
+            // Still accept empty ruled-cell gaps + checkboxes
+            store.setSmartFillSuggestions(
+              suggestions.filter(
+                (s) =>
+                  s.kind === 'checkbox' ||
+                  (s.kind === 'text' &&
+                    (s.label === 'Blank field' || !s.label)),
+              ),
+            );
+          } else if (existingCount > 0) {
+            store.setSmartFillSuggestions(
+              suggestions.filter(
+                (s) =>
+                  s.kind === 'checkbox' ||
+                  (s.kind === 'text' &&
+                    (s.label === 'Blank field' || !s.label)),
+              ),
+            );
+          }
+          store.acceptAllSmartFill();
         })();
       } else {
         store.setSmartFillSuggestions([]);

@@ -10,6 +10,7 @@ import type {
   OverlayObject,
   SmartFillSuggestion,
 } from '../document/types.ts';
+import { formFieldCssFontSize } from './formFieldTypography.ts';
 
 export type FormOverlayProps = {
   pageIndex: number;
@@ -35,10 +36,27 @@ function isTruthyCheck(value: string): boolean {
   return value === 'true' || value === 'Yes' || value === '1' || value === 'on';
 }
 
+/** Values that should stay visible in View/Add/Sign (like Add Text overlays). */
+function fieldHasCommittedValue(field: FormField): boolean {
+  if (field.type === 'checkbox' || field.type === 'radio') {
+    return isTruthyCheck(field.value);
+  }
+  if (field.type === 'signature') {
+    return field.value.startsWith('data:image/');
+  }
+  const v = field.value?.trim() ?? '';
+  if (!v || v.startsWith('data:image/')) return false;
+  return true;
+}
+
 function fieldHint(field: FormField): string {
+  // Explicit empty placeholder = keep the box quiet (AcroForm names look like junk fill)
   if (field.placeholder === '') return '';
   if (field.placeholder) return field.placeholder;
+  if (field.type === 'checkbox' || field.type === 'radio') return '';
   if (/^text\d+$/i.test(field.name.replace(/#\d+$/, ''))) return '';
+  // Smart Fill–named fields may use a short label; never paint raw AcroForm names
+  if (!/^smartfill:/i.test(field.name)) return '';
   const fromName = field.name
     .replace(/^smartfill:/i, '')
     .replace(/#\d+$/i, '')
@@ -47,6 +65,8 @@ function fieldHint(field: FormField): string {
     .trim();
   if (
     fromName &&
+    fromName.length <= 24 &&
+    !/\d+$/.test(fromName) &&
     !/^field/i.test(fromName) &&
     !/^text\d+$/i.test(fromName)
   ) {
@@ -97,13 +117,18 @@ export function FormOverlay({
     });
   }, [suggestions, pageIndex, smartFillEnabled, pageFields]);
 
+  const visibleFields = useMemo(
+    () => (active ? pageFields : pageFields.filter(fieldHasCommittedValue)),
+    [active, pageFields],
+  );
+
   const inputRefs = useRef(new Map<string, HTMLElement>());
 
   useEffect(() => {
-    if (!focusedFieldId) return;
+    if (!focusedFieldId || !active) return;
     const el = inputRefs.current.get(focusedFieldId);
     el?.focus();
-  }, [focusedFieldId]);
+  }, [focusedFieldId, active]);
 
   const handleTab = useCallback(
     (e: KeyboardEvent, currentId: string) => {
@@ -127,7 +152,9 @@ export function FormOverlay({
     onFocusedFieldChange?.(suggestion.id);
   };
 
-  if (!active && pageSuggestions.length === 0) {
+  // View/Add/Sign: still show filled ink (same as Add Text overlays stay visible).
+  // Fill: show all interactive fields. Suggestions only while Fill + Smart Fill on.
+  if (visibleFields.length === 0 && pageSuggestions.length === 0) {
     return null;
   }
 
@@ -141,18 +168,15 @@ export function FormOverlay({
         pointerEvents: 'none',
       }}
     >
-      {active
-        ? pageFields.map((field) => {
+      {visibleFields.map((field) => {
+            const interactive = active && !field.readOnly;
             const style = {
               left: field.rect.x * scale,
               top: field.rect.y * scale,
               width: Math.max(4, field.rect.width * scale),
               height: Math.max(4, field.rect.height * scale),
-              fontSize: Math.max(
-                9,
-                Math.min(14, field.rect.height * scale * 0.72),
-              ),
-              pointerEvents: 'auto' as const,
+              fontSize: formFieldCssFontSize(field.rect, scale),
+              pointerEvents: (interactive ? 'auto' : 'none') as 'auto' | 'none',
             };
 
             const setRef = (el: HTMLElement | null) => {
@@ -164,17 +188,46 @@ export function FormOverlay({
             const asCheckbox =
               field.type === 'checkbox' ||
               (field.type === 'text' &&
-                field.rect.width <= 26 &&
-                field.rect.height <= 26 &&
+                field.rect.width <= 32 &&
+                field.rect.height <= 32 &&
                 Math.min(field.rect.width, field.rect.height) /
                   Math.max(field.rect.width, field.rect.height) >=
                   0.55);
 
             if (asCheckbox) {
-              // Follow printed box size exactly through zoom — no fixed 14–18 cap
               const boxW = Math.max(8, field.rect.width * scale);
               const boxH = Math.max(8, field.rect.height * scale);
+              const hit = interactive
+                ? Math.max(22, boxW, boxH)
+                : Math.max(boxW, boxH);
+              const padX = (hit - boxW) / 2;
+              const padY = (hit - boxH) / 2;
               const checked = isTruthyCheck(field.value);
+              if (!active && !checked) return null;
+              const toggle = () => {
+                if (!interactive) return;
+                onFieldChange(field.id, checked ? 'false' : 'true');
+              };
+              if (!interactive) {
+                return (
+                  <div
+                    key={field.id}
+                    className="form-overlay__check form-overlay__check--on form-overlay__check--ink"
+                    style={{
+                      left: field.rect.x * scale - padX,
+                      top: field.rect.y * scale - padY,
+                      width: hit,
+                      height: hit,
+                      fontSize: Math.max(8, Math.min(boxW, boxH) * 0.75),
+                      pointerEvents: 'none',
+                      zIndex: 5,
+                    }}
+                    aria-hidden
+                  >
+                    X
+                  </div>
+                );
+              }
               return (
                 <button
                   key={field.id}
@@ -186,21 +239,32 @@ export function FormOverlay({
                       : 'form-overlay__check'
                   }
                   style={{
-                    left: field.rect.x * scale,
-                    top: field.rect.y * scale,
-                    width: boxW,
-                    height: boxH,
+                    left: field.rect.x * scale - padX,
+                    top: field.rect.y * scale - padY,
+                    width: hit,
+                    height: hit,
                     fontSize: Math.max(8, Math.min(boxW, boxH) * 0.75),
                     pointerEvents: 'auto',
+                    zIndex: 20,
                   }}
                   title={hint || 'Check'}
                   aria-label={hint || 'Checkbox'}
                   aria-pressed={checked}
                   disabled={field.readOnly}
-                  onClick={() =>
-                    onFieldChange(field.id, checked ? 'false' : 'true')
-                  }
-                  onKeyDown={(e) => handleTab(e, field.id)}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    toggle();
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === ' ' || e.key === 'Enter') {
+                      e.preventDefault();
+                      toggle();
+                      return;
+                    }
+                    handleTab(e, field.id);
+                  }}
                   onFocus={() => onFocusedFieldChange?.(field.id)}
                 >
                   {checked ? 'X' : ''}
@@ -209,6 +273,19 @@ export function FormOverlay({
             }
 
             if (field.type === 'radio') {
+              if (!active && !field.value) return null;
+              if (!interactive) {
+                return (
+                  <div
+                    key={field.id}
+                    className="form-overlay__field form-overlay__field--radio form-overlay__field--ink"
+                    style={style}
+                    aria-hidden
+                  >
+                    ●
+                  </div>
+                );
+              }
               return (
                 <label
                   key={field.id}
@@ -234,6 +311,19 @@ export function FormOverlay({
             }
 
             if (field.type === 'dropdown') {
+              if (!active && !field.value.trim()) return null;
+              if (!interactive) {
+                return (
+                  <div
+                    key={field.id}
+                    className="form-overlay__field form-overlay__field--text form-overlay__field--ink"
+                    style={style}
+                    aria-hidden
+                  >
+                    {field.value}
+                  </div>
+                );
+              }
               return (
                 <select
                   key={field.id}
@@ -262,6 +352,7 @@ export function FormOverlay({
               // Ink lives on the Konva overlay (draggable). Once signed, render
               // NOTHING here — leaving a label box would desync from the ink.
               if (signed) return null;
+              if (!active) return null;
               return (
                 <button
                   key={field.id}
@@ -281,9 +372,23 @@ export function FormOverlay({
             }
 
             if (field.type === 'date' || field.type === 'text') {
-              // Always textarea: wrap inside the box (never spill sideways like Stirling).
-              // Overflow clips to the printed field — only what fits is visible.
-              const tall = field.rect.height >= 36;
+              const tall = field.rect.height >= 28;
+              if (!interactive) {
+                return (
+                  <div
+                    key={field.id}
+                    className={
+                      tall
+                        ? 'form-overlay__field form-overlay__field--text form-overlay__field--multiline form-overlay__field--ink'
+                        : 'form-overlay__field form-overlay__field--text form-overlay__field--wrap form-overlay__field--ink'
+                    }
+                    style={style}
+                    aria-hidden
+                  >
+                    {field.value}
+                  </div>
+                );
+              }
               return (
                 <textarea
                   key={field.id}
@@ -293,18 +398,7 @@ export function FormOverlay({
                       ? 'form-overlay__field form-overlay__field--text form-overlay__field--multiline'
                       : 'form-overlay__field form-overlay__field--text form-overlay__field--wrap'
                   }
-                  style={{
-                    ...style,
-                    fontSize: Math.max(
-                      9,
-                      Math.min(
-                        tall ? 13 : 14,
-                        tall
-                          ? 12 * Math.min(scale, 1.25)
-                          : field.rect.height * scale * 0.72,
-                      ),
-                    ),
-                  }}
+                  style={style}
                   value={field.value}
                   disabled={field.readOnly}
                   aria-label={
@@ -328,10 +422,10 @@ export function FormOverlay({
             }
 
             return null;
-          })
-        : null}
+          })}
 
-      {pageSuggestions.map((s) => {
+      {active
+        ? pageSuggestions.map((s) => {
         const style = {
           left: s.rect.x * scale,
           top: s.rect.y * scale,
@@ -415,7 +509,8 @@ export function FormOverlay({
             />
           </div>
         );
-      })}
+      })
+        : null}
     </div>
   );
 }

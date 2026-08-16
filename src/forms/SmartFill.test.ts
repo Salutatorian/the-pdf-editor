@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  dedupeFormFields,
   detectSmartFillSuggestions,
+  fieldsClash,
   filterSuggestionsAgainstFields,
+  insetTextFieldFromLabelBand,
   normalizeFieldType,
   placeholderFromLabel,
   suggestionToFormField,
@@ -415,5 +418,75 @@ describe('detectSmartFillSuggestions', () => {
     expect(field.type).toBe('checkbox');
     expect(field.value).toBe('false');
     expect(field.placeholder).toBe('');
+  });
+
+  it('keeps language-grid checkbox neighbors (Speak / Write / …)', () => {
+    // Centers ~18px apart — distinct cells on employment forms
+    const speak = { x: 200, y: 400, width: 12, height: 12 };
+    const write = { x: 218, y: 400, width: 12, height: 12 };
+    expect(fieldsClash(speak, write)).toBe(false);
+
+    const kept = dedupeFormFields([
+      {
+        id: 'a',
+        name: 'Speak',
+        type: 'checkbox',
+        pageIndex: 0,
+        rect: speak,
+        value: 'false',
+      },
+      {
+        id: 'b',
+        name: 'Write',
+        type: 'checkbox',
+        pageIndex: 0,
+        rect: write,
+        value: 'false',
+      },
+      {
+        id: 'c',
+        name: 'Read',
+        type: 'checkbox',
+        pageIndex: 0,
+        rect: { x: 236, y: 400, width: 12, height: 12 },
+        value: 'false',
+      },
+    ]);
+    expect(kept).toHaveLength(3);
+  });
+
+  it('still merges stacked duplicate checkboxes', () => {
+    expect(
+      fieldsClash(
+        { x: 100, y: 200, width: 12, height: 12 },
+        { x: 102, y: 201, width: 12, height: 12 },
+      ),
+    ).toBe(true);
+  });
+
+  it('insets tall description fields below the printed title band', () => {
+    const field = insetTextFieldFromLabelBand({
+      id: '1',
+      name: 'Description of work',
+      type: 'text',
+      pageIndex: 0,
+      rect: { x: 50, y: 200, width: 400, height: 80 },
+      value: '',
+    });
+    expect(field.rect.y).toBeGreaterThan(200);
+    expect(field.rect.height).toBeLessThan(80);
+    expect(field.rect.y + field.rect.height).toBeLessThanOrEqual(282);
+  });
+
+  it('does not inset short single-line fields', () => {
+    const field = insetTextFieldFromLabelBand({
+      id: '1',
+      name: 'Name',
+      type: 'text',
+      pageIndex: 0,
+      rect: { x: 50, y: 100, width: 200, height: 18 },
+      value: '',
+    });
+    expect(field.rect).toEqual({ x: 50, y: 100, width: 200, height: 18 });
   });
 });

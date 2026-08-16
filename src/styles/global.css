@@ -1090,6 +1090,22 @@ svg {
   vertical-align: top;
 }
 
+/* Filled values in View / Add / Sign — no edit chrome, same ink as Fill */
+.form-overlay__field--ink {
+  border-color: transparent !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  pointer-events: none;
+  color: #111;
+}
+
+.form-overlay__check--ink {
+  border-color: transparent !important;
+  background: transparent !important;
+  pointer-events: none;
+  cursor: default;
+}
+
 /* Tall notes: a bit more padding, still clipped to the printed box */
 .form-overlay__field--multiline {
   padding: 4px 5px;

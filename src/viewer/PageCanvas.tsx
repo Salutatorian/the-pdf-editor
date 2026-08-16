@@ -58,6 +58,8 @@ export function PageCanvas({
   const [textSpans, setTextSpans] = useState<TextSpanLayout[]>([]);
   const [isScan, setIsScan] = useState(false);
   const renderGen = useRef(0);
+  /** Scan detection must not re-run on zoom — low zoom antialias fools the midtone check. */
+  const scanDetectedForPage = useRef<string | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -91,7 +93,19 @@ export function PageCanvas({
           width: Math.floor(size.width),
           height: Math.floor(size.height),
         });
-        setIsScan(looksLikeScannedPhoto(canvas!));
+
+        // Detect once per page at a sharp-enough zoom. Low zoom antialias
+        // creates gray midtones that falsely look like photos → Dark pages
+        // flips to white when zooming out.
+        const scanKey = `${pageIndex}:${pageRotate}:${rotation}`;
+        if (scanDetectedForPage.current !== scanKey) {
+          if (scale >= 0.8) {
+            scanDetectedForPage.current = scanKey;
+            setIsScan(looksLikeScannedPhoto(canvas!));
+          } else {
+            setIsScan(false);
+          }
+        }
         onRendered?.(size);
 
         const { items, styles } = await getPageTextContent(page);
@@ -206,7 +220,7 @@ function looksLikeScannedPhoto(canvas: HTMLCanvasElement): boolean {
     const nearBlack = r < 45 && g < 45 && b < 45;
     if (!nearWhite && !nearBlack) midtones++;
   }
-  return midtones / total > 0.12;
+  return midtones / total > 0.2;
 }
 
 function pdfjsTransformToCss(
