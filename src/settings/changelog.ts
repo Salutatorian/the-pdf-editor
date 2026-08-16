@@ -30,6 +30,10 @@ export const CHANGELOG: readonly ChangelogRelease[] = [
         kind: 'fixed',
         text: 'Release CI reliably rebuilds latest.json so Windows/macOS/Linux updates publish together',
       },
+      {
+        kind: 'improved',
+        text: 'If you installed before 1.4.3: install this build once (run the new .exe/.dmg — no need to uninstall). Future updates install from the Update toast',
+      },
     ],
   },
   {

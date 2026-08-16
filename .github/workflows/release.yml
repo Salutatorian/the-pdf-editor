@@ -78,7 +78,10 @@ jobs:
 
             (Plus small `.sig` / `latest.json` files for in-app updates — ignore those for manual install.)
 
-            In-app updates: after installing this build, future versions install from the Update toast without a manual redownload.
+            ### Upgrading from an older install?
+            **Do not uninstall** from Control Panel / Programs and Features. Run this installer over your existing install — it upgrades in place.
+
+            After **1.4.3+**, future versions install from the in-app Update toast (no GitHub redownload). If you are still on a build older than 1.4.3, install this release once so that path works.
 
             See the README for screenshots and features.
           releaseDraft: false

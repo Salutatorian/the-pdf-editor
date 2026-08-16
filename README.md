@@ -38,6 +38,13 @@ Installers are built for all three platforms on every release:
 
 → **[Latest release](https://github.com/Salutatorian/the-pdf-editor/releases/latest)**
 
+### Already on an older version?
+
+**You do not need to uninstall** from Control Panel / Programs and Features. Download the latest installer and run it — it upgrades in place.
+
+- **Before 1.4.3:** one manual install of [the latest release](https://github.com/Salutatorian/the-pdf-editor/releases/latest) is required so in-app updates work correctly (older builds opened the GitHub page instead of installing).
+- **1.4.3 and later:** when a new version ships, use the Update toast in the app — no redownload from GitHub.
+
 > Builds publish automatically via GitHub Actions when a version tag (e.g. `v1.2`) is pushed. If assets are still processing, check the [Actions](https://github.com/Salutatorian/the-pdf-editor/actions) tab.
 
 ## Screenshots
