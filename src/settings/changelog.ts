@@ -18,6 +18,29 @@ export type ChangelogRelease = {
  */
 export const CHANGELOG: readonly ChangelogRelease[] = [
   {
+    version: '1.4.2',
+    title: 'Open with PDF · transparent text typing',
+    date: '2026-08-16',
+    items: [
+      {
+        kind: 'fixed',
+        text: 'Open with / double-click a PDF now opens that file in the app (not just an empty window)',
+      },
+      {
+        kind: 'added',
+        text: 'PDF file association — app appears in Open with; second opens focus the existing window',
+      },
+      {
+        kind: 'fixed',
+        text: 'Add Text no longer covers the page with a white box — overlays are transparent',
+      },
+      {
+        kind: 'improved',
+        text: 'Click or right-click with Text selected places a box and types immediately (no double-click)',
+      },
+    ],
+  },
+  {
     version: '1.4.1',
     title: 'Printing fix · text formatting · black theme',
     date: '2026-08-08',

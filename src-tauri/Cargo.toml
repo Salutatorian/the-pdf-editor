@@ -1,6 +1,6 @@
 [package]
 name = "pdf_editor"
-version = "1.4.1"
+version = "1.4.2"
 description = "pdf_editor — desktop PDF viewer and editor"
 authors = ["JW"]
 license = "MIT"
@@ -26,3 +26,5 @@ tauri-plugin-shell = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-process = "2"
 tauri-plugin-updater = "2"
+tauri-plugin-single-instance = "2"
+url = "2"

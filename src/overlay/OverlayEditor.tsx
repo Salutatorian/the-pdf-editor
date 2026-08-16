@@ -105,35 +105,23 @@ function OverlayNode({
     case 'date':
     case 'initials':
       return (
-        <Group>
-          {/* Opaque pad so restored annotations cover baked ink underneath */}
-          <Rect
-            x={overlay.x * scale}
-            y={overlay.y * scale}
-            width={overlay.width * scale}
-            height={overlay.height * scale}
-            fill="#ffffff"
-            opacity={0.92}
-            listening={false}
-          />
-          <Text
-            {...common}
-            text={overlay.text ?? (overlay.kind === 'date' ? new Date().toLocaleDateString() : '')}
-            fontSize={(overlay.fontSize ?? 14) * scale}
-            fontFamily={overlay.fontFamily ?? 'IBM Plex Sans'}
-            fontStyle={
-              overlay.italic
-                ? overlay.bold
-                  ? 'italic bold'
-                  : 'italic'
-                : overlay.bold
-                  ? 'bold'
-                  : 'normal'
-            }
-            textDecoration={overlay.underline ? 'underline' : ''}
-            fill={overlay.color ?? '#111111'}
-          />
-        </Group>
+        <Text
+          {...common}
+          text={overlay.text ?? (overlay.kind === 'date' ? new Date().toLocaleDateString() : '')}
+          fontSize={(overlay.fontSize ?? 14) * scale}
+          fontFamily={overlay.fontFamily ?? 'IBM Plex Sans'}
+          fontStyle={
+            overlay.italic
+              ? overlay.bold
+                ? 'italic bold'
+                : 'italic'
+              : overlay.bold
+                ? 'bold'
+                : 'normal'
+          }
+          textDecoration={overlay.underline ? 'underline' : ''}
+          fill={overlay.color ?? '#111111'}
+        />
       );
     case 'highlight':
       return (
@@ -393,8 +381,20 @@ export function OverlayEditor({
 
   useEffect(() => {
     if (!editingOverlay) return;
-    editRef.current?.focus();
-    editRef.current?.select();
+    const el = editRef.current;
+    if (!el) return;
+    const focusCaret = () => {
+      el.focus({ preventScroll: true });
+      const len = el.value.length;
+      el.setSelectionRange(len, len);
+    };
+    focusCaret();
+    const t0 = window.setTimeout(focusCaret, 0);
+    const t1 = window.setTimeout(focusCaret, 40);
+    return () => {
+      window.clearTimeout(t0);
+      window.clearTimeout(t1);
+    };
   }, [editingOverlay?.id]);
 
   const beginEdit = (overlay: OverlayObject) => {
@@ -425,6 +425,8 @@ export function OverlayEditor({
     if (!editingId) return;
     onUpdate(editingId, { text: editDraft });
     setEditingId(null);
+    // Back to Select so move/resize handles appear after typing
+    onToolConsumed?.();
   };
 
   useEffect(() => {
@@ -455,6 +457,27 @@ export function OverlayEditor({
         height: o.height,
       }));
 
+  const placeTextLikeTool = (toolKind: OverlayKind, x: number, y: number) => {
+    const tool = toolByKind(toolKind);
+    if (!tool) return;
+    const zIndex =
+      pageOverlays.reduce((m, o) => Math.max(m, o.zIndex), 0) + 1;
+    const created = defaultOverlayFromTool(tool, pageIndex, x, y, zIndex);
+    const id = onAdd(created);
+    if (
+      typeof id === 'string' &&
+      (created.kind === 'text' ||
+        created.kind === 'date' ||
+        created.kind === 'initials')
+    ) {
+      setEditDraft(created.text ?? '');
+      setEditingId(id);
+      // Stay on the text tool so the next click places another field.
+      return;
+    }
+    onToolConsumed?.();
+  };
+
   const handleStageClick = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
     if (!interactive) return;
     const stage = e.target.getStage();
@@ -480,23 +503,41 @@ export function OverlayEditor({
         return;
       }
 
-      const tool = toolByKind(activeTool);
-      if (!tool) return;
-      const zIndex =
-        pageOverlays.reduce((m, o) => Math.max(m, o.zIndex), 0) + 1;
-      const created = defaultOverlayFromTool(tool, pageIndex, x, y, zIndex);
-      const id = onAdd(created);
-      if (
-        typeof id === 'string' &&
-        (created.kind === 'text' ||
-          created.kind === 'date' ||
-          created.kind === 'initials')
-      ) {
-        setEditDraft(created.text ?? '');
-        setEditingId(id);
-      }
-      // Return to Select so the user can move/resize immediately
-      onToolConsumed?.();
+      placeTextLikeTool(activeTool, x, y);
+    }
+  };
+
+  const handleContextMenu = (e: Konva.KonvaEventObject<PointerEvent>) => {
+    if (!interactive) return;
+    e.evt.preventDefault();
+    e.evt.stopPropagation();
+    const stage = e.target.getStage();
+    if (!stage) return;
+    const pos = stage.getPointerPosition();
+    if (!pos) return;
+    const { x, y } = toPagePoint(pos.x, pos.y);
+
+    // Right-click on existing text → type immediately
+    const hit = pageOverlays.find(
+      (o) =>
+        (o.kind === 'text' || o.kind === 'date' || o.kind === 'initials') &&
+        x >= o.x &&
+        x <= o.x + o.width &&
+        y >= o.y &&
+        y <= o.y + o.height,
+    );
+    if (hit) {
+      beginEdit(hit);
+      return;
+    }
+
+    // Right-click empty page while Text/Date/Initials is armed → place & type
+    if (
+      activeTool === 'text' ||
+      activeTool === 'date' ||
+      activeTool === 'initials'
+    ) {
+      placeTextLikeTool(activeTool, x, y);
     }
   };
 
@@ -595,6 +636,7 @@ export function OverlayEditor({
       listening={interactive}
       onClick={handleStageClick}
       onTap={handleStageClick}
+      onContextMenu={handleContextMenu}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
@@ -614,10 +656,20 @@ export function OverlayEditor({
               nodeRefs={nodeRefs.current}
               onSelect={(e) => {
                 e.cancelBubble = true;
-                onSelect(
-                  [overlay.id],
-                  e.evt.shiftKey || e.evt.ctrlKey || e.evt.metaKey,
-                );
+                const additive =
+                  e.evt.shiftKey || e.evt.ctrlKey || e.evt.metaKey;
+                // One click on text → type immediately (no double-click)
+                if (
+                  interactive &&
+                  !additive &&
+                  (overlay.kind === 'text' ||
+                    overlay.kind === 'date' ||
+                    overlay.kind === 'initials')
+                ) {
+                  beginEdit(overlay);
+                  return;
+                }
+                onSelect([overlay.id], additive);
               }}
               onDblClick={(e) => {
                 e.cancelBubble = true;
@@ -742,7 +794,8 @@ export function OverlayEditor({
           padding: '1px 2px',
           border: '1px solid rgba(47, 127, 212, 0.85)',
           borderRadius: 2,
-          background: 'rgba(255,255,255,0.96)',
+          background: 'transparent',
+          caretColor: editingOverlay.color ?? '#111111',
           resize: 'none',
           overflow: 'hidden',
           whiteSpace: 'pre-wrap',
@@ -750,6 +803,7 @@ export function OverlayEditor({
           zIndex: 5,
           boxSizing: 'border-box',
           outline: 'none',
+          boxShadow: 'none',
         }}
         onChange={(e) => setEditDraft(e.target.value)}
         onBlur={() => commitEdit()}
@@ -758,6 +812,7 @@ export function OverlayEditor({
           if (e.key === 'Escape') {
             e.preventDefault();
             setEditingId(null);
+            onToolConsumed?.();
             return;
           }
           if (e.key === 'Enter' && !e.shiftKey) {

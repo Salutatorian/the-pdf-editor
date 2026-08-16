@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "pdf_editor",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "identifier": "com.pdfeditor.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -45,6 +45,15 @@
     "active": true,
     "targets": ["nsis", "dmg", "appimage"],
     "createUpdaterArtifacts": true,
+    "fileAssociations": [
+      {
+        "ext": ["pdf"],
+        "mimeType": "application/pdf",
+        "description": "PDF Document",
+        "role": "Editor",
+        "rank": "Default"
+      }
+    ],
     "windows": {
       "nsis": {
         "installMode": "currentUser",

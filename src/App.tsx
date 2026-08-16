@@ -105,6 +105,7 @@ import {
   listRecentFiles,
   removeRecentFile,
 } from './persistence/recentFiles.ts';
+import { watchOsOpenedFiles } from './persistence/openFromOs.ts';
 import { clearDraft, saveDraft } from './persistence/drafts.ts';
 import {
   loadAnnotationLayer,
@@ -754,6 +755,26 @@ function AppInner() {
     },
     [openBytes, handleOpen, store],
   );
+
+  // "Open with" / double-click: load the PDF the OS handed us (cold + warm)
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void watchOsOpenedFiles((path, name) => {
+      if (disposed) return;
+      void handleOpenRecent(path, name);
+    }).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [handleOpenRecent]);
 
   const handleRemoveRecent = useCallback(
     (path: string) => {
