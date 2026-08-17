@@ -587,7 +587,11 @@ export function TopToolbar({
                       key={tool.id}
                       value={tool.kind}
                       aria-label={tool.label}
-                      title={tool.label}
+                      title={
+                        tool.kind === 'text'
+                          ? 'Text — T places at cursor, or double-click'
+                          : tool.label
+                      }
                       className="size-7 shrink-0 p-0"
                     >
                       {Icon ? <Icon className="size-3.5" /> : tool.label[0]}

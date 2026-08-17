@@ -1219,7 +1219,7 @@ function AppInner() {
       }
       // Mode switch must stay instant — never block on Smart Fill / scans
       store.setMode(next);
-      if (next === 'add') setAddTool('text');
+      if (next === 'add') setAddTool('select');
       if (next === 'sign') {
         // Clicking Sign pops the signature pad immediately — no extra button
         setAddTool('signature');
@@ -1989,6 +1989,12 @@ function AppInner() {
                   }
                   onReplaceImage={(id) => void replaceOverlayImage(id)}
                   onToolConsumed={() => setAddTool('select')}
+                  textHotkeyEnabled={mode === 'add' || mode === 'view'}
+                  onEnsureAddMode={() => {
+                    if (mode !== 'add') store.setMode('add');
+                    setAddTool('select');
+                  }}
+                  onDelete={(id) => store.deleteOverlays([id])}
                 />
                 <FormOverlay
                   pageIndex={pageIndex}

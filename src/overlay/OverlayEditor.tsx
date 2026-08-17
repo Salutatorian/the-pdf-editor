@@ -33,6 +33,7 @@ function bakeTransformScale(node: Konva.Node): { width: number; height: number }
   if (node.getClassName() === 'Group') {
     const group = node as Konva.Group;
     for (const child of group.getChildren()) {
+      if (child.name() === 'move-pad') continue;
       const cls = child.getClassName();
       if (cls === 'Rect' || cls === 'Image') {
         child.width(width);
@@ -68,7 +69,22 @@ export type OverlayEditorProps = {
   onReplaceImage?: (overlayId: string) => void;
   /** Called after a place tool finishes so the UI can return to Select */
   onToolConsumed?: () => void;
+  /** T / double-click place text (Add + View). Off in Fill/Sign/Organize. */
+  textHotkeyEnabled?: boolean;
+  /** Switch into Add → Select so the new box can be edited/moved. */
+  onEnsureAddMode?: () => void;
+  /** Remove a discarded empty text box. */
+  onDelete?: (id: string) => void;
 };
+
+/** Empty / whitespace-only typewriter boxes should not stay on the page. */
+export function isBlankOverlayText(text: string | undefined): boolean {
+  return !(text ?? '').trim();
+}
+
+function isTextLikeKind(kind: OverlayKind): boolean {
+  return kind === 'text' || kind === 'date' || kind === 'initials';
+}
 
 function useHtmlImage(url: string | undefined): HTMLImageElement | null {
   const [img, setImg] = useState<HTMLImageElement | null>(null);
@@ -91,6 +107,7 @@ function OverlayNode({
   draggable,
   selected,
   onSelect,
+  onEdit,
   onDblClick,
   onDragMove,
   onDragEnd,
@@ -103,6 +120,7 @@ function OverlayNode({
   draggable: boolean;
   selected: boolean;
   onSelect: (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => void;
+  onEdit?: (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => void;
   onDblClick?: (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => void;
   onDragMove: (e: Konva.KonvaEventObject<DragEvent>) => void;
   onDragEnd: (e: Konva.KonvaEventObject<DragEvent>) => void;
@@ -140,12 +158,16 @@ function OverlayNode({
     case 'initials': {
       const w = overlay.width * scale;
       const h = overlay.height * scale;
+      const pad = Math.max(10, 12 * Math.min(scale, 1.5));
       const label =
         overlay.text ??
         (overlay.kind === 'date' ? new Date().toLocaleDateString() : '');
-      const showFrame = selected || !label.trim();
-      // Group + hit rect so empty / short text stays clickable and draggable
-      // across the whole box, not just the glyph bounds.
+      const hasText = !isBlankOverlayText(label);
+      const showFrame = selected || !hasText;
+      const frameColor = selected
+        ? 'rgba(47, 127, 212, 0.7)'
+        : 'rgba(47, 127, 212, 0.4)';
+      // One blue outline = the box. Invisible pad around it is the drag halo.
       return (
         <Group
           id={overlay.id}
@@ -155,9 +177,27 @@ function OverlayNode({
           height={h}
           rotation={overlay.rotation}
           draggable={draggable}
+          dragDistance={4}
           opacity={overlay.opacity ?? 1}
-          onClick={onSelect}
-          onTap={onSelect}
+          onMouseDown={(e) => {
+            const fromPad = hasText || e.target.name() === 'move-pad';
+            e.currentTarget.setAttr('dragFromPad', fromPad);
+          }}
+          onDragStart={(e) => {
+            if (!e.target.getAttr('dragFromPad')) {
+              e.target.stopDrag();
+            }
+          }}
+          onClick={(e) => {
+            e.cancelBubble = true;
+            if (!hasText && e.target.name() === 'type-hit') onEdit?.(e);
+            else onSelect(e);
+          }}
+          onTap={(e) => {
+            e.cancelBubble = true;
+            if (!hasText && e.target.name() === 'type-hit') onEdit?.(e);
+            else onSelect(e);
+          }}
           onDblClick={onDblClick}
           onDblTap={onDblClick}
           onDragMove={onDragMove}
@@ -170,14 +210,29 @@ function OverlayNode({
           }}
         >
           <Rect
+            name="move-pad"
+            x={-pad}
+            y={-pad}
+            width={w + pad * 2}
+            height={h + pad * 2}
+            fill="rgba(0,0,0,0.001)"
+            listening
+            ref={(node) => {
+              if (!node) return;
+              // Invisible drag halo must not inflate the rotate handle bounds.
+              node.getClientRect = () => ({ x: 0, y: 0, width: 0, height: 0 });
+            }}
+          />
+          <Rect
+            name="type-hit"
             x={0}
             y={0}
             width={w}
             height={h}
             fill="rgba(0,0,0,0.001)"
-            stroke={showFrame ? 'rgba(47, 127, 212, 0.45)' : undefined}
+            listening={!hasText}
+            stroke={showFrame ? frameColor : undefined}
             strokeWidth={showFrame ? 1 : 0}
-            dash={showFrame ? [4, 3] : undefined}
           />
           <Text
             x={2}
@@ -427,8 +482,14 @@ export function OverlayEditor({
   onRequestImage,
   onReplaceImage,
   onToolConsumed,
+  textHotkeyEnabled = false,
+  onEnsureAddMode,
+  onDelete,
 }: OverlayEditorProps) {
   const stageRef = useRef<Konva.Stage>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const lastPagePt = useRef<{ x: number; y: number } | null>(null);
+  const pointerOverPage = useRef(false);
   const trRef = useRef<Konva.Transformer>(null);
   const nodeRefs = useRef(new Map<string, Konva.Node>());
   const [guides, setGuides] = useState<AlignmentGuide[]>([]);
@@ -450,6 +511,16 @@ export function OverlayEditor({
         .sort((a, b) => a.zIndex - b.zIndex),
     [overlays, pageIndex],
   );
+
+  const needsTransformer = selectedIds.some((id) =>
+    pageOverlays.some((o) => o.id === id),
+  );
+  const textOnlyChrome =
+    needsTransformer &&
+    selectedIds.every((id) => {
+      const overlay = pageOverlays.find((o) => o.id === id);
+      return overlay ? isTextLikeKind(overlay.kind) : false;
+    });
 
   const editingOverlay = editingId
     ? pageOverlays.find((o) => o.id === editingId) ?? null
@@ -505,11 +576,26 @@ export function OverlayEditor({
 
   const commitEdit = (opts?: { consumeTool?: boolean }) => {
     if (!editingId) return;
-    onUpdate(editingId, { text: editDraft });
+    const id = editingId;
+    const blank = isBlankOverlayText(editDraft);
     setEditingId(null);
-    // Don't auto-switch to Select on blur — that ate the next click meant to
-    // place another text box. Only consume when the user explicitly finishes.
-    if (opts?.consumeTool) onToolConsumed?.();
+    if (opts?.consumeTool !== false) onToolConsumed?.();
+    if (blank) {
+      onDelete?.(id);
+      return;
+    }
+    onUpdate(id, { text: editDraft });
+  };
+
+  const cancelEdit = () => {
+    if (!editingId) return;
+    const id = editingId;
+    const original = overlays.find((o) => o.id === id);
+    const blank =
+      isBlankOverlayText(editDraft) && isBlankOverlayText(original?.text);
+    setEditingId(null);
+    onToolConsumed?.();
+    if (blank) onDelete?.(id);
   };
 
   const clickedEmptyStage = (target: Konva.Node, stage: Konva.Stage) => {
@@ -550,7 +636,15 @@ export function OverlayEditor({
     if (!tool) return;
     const zIndex =
       pageOverlays.reduce((m, o) => Math.max(m, o.zIndex), 0) + 1;
-    const created = defaultOverlayFromTool(tool, pageIndex, x, y, zIndex);
+    const clampedX = Math.max(0, Math.min(x, width - 8));
+    const clampedY = Math.max(0, Math.min(y, height - 8));
+    const created = defaultOverlayFromTool(
+      tool,
+      pageIndex,
+      clampedX,
+      clampedY,
+      zIndex,
+    );
     const id = onAdd(created);
     if (
       typeof id === 'string' &&
@@ -560,11 +654,64 @@ export function OverlayEditor({
     ) {
       setEditDraft(created.text ?? '');
       setEditingId(id);
-      // Stay on the text tool so the next click places another field.
-      return;
     }
+    onEnsureAddMode?.();
     onToolConsumed?.();
   };
+
+  const placeTextAtCursor = () => {
+    const pt = lastPagePt.current;
+    if (!pt) return;
+    onEnsureAddMode?.();
+    placeTextLikeTool('text', pt.x, pt.y);
+  };
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const root = rootRef.current;
+      if (!root) return;
+      const r = root.getBoundingClientRect();
+      if (
+        e.clientX < r.left ||
+        e.clientX > r.right ||
+        e.clientY < r.top ||
+        e.clientY > r.bottom
+      ) {
+        pointerOverPage.current = false;
+        return;
+      }
+      pointerOverPage.current = true;
+      lastPagePt.current = {
+        x: (e.clientX - r.left) / scale,
+        y: (e.clientY - r.top) / scale,
+      };
+    };
+    window.addEventListener('mousemove', onMove);
+    return () => window.removeEventListener('mousemove', onMove);
+  }, [scale]);
+
+  const placeTextAtCursorRef = useRef(placeTextAtCursor);
+  placeTextAtCursorRef.current = placeTextAtCursor;
+
+  useEffect(() => {
+    if (!textHotkeyEnabled) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key !== 't' && e.key !== 'T') return;
+      const target = e.target;
+      if (target instanceof HTMLElement) {
+        const tag = target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        if (target.isContentEditable) return;
+      }
+      if (!pointerOverPage.current || !lastPagePt.current) return;
+      e.preventDefault();
+      placeTextAtCursorRef.current();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [textHotkeyEnabled]);
 
   const handleStageClick = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
     if (!interactive) return;
@@ -591,8 +738,26 @@ export function OverlayEditor({
     if (activeTool === 'draw' || activeTool === 'highlight' || activeTool === 'redact') {
       return;
     }
+    // Text: single-click must not spawn another box (T or double-click).
+    if (activeTool === 'text') {
+      onSelect([]);
+      return;
+    }
 
     placeTextLikeTool(activeTool, x, y);
+  };
+
+  const handleStageDblClick = (
+    e: Konva.KonvaEventObject<MouseEvent | TouchEvent>,
+  ) => {
+    if (!interactive || !textHotkeyEnabled) return;
+    const stage = e.target.getStage();
+    if (!stage || !clickedEmptyStage(e.target, stage)) return;
+    const pos = stage.getPointerPosition();
+    if (!pos) return;
+    const { x, y } = toPagePoint(pos.x, pos.y);
+    lastPagePt.current = { x, y };
+    placeTextLikeTool('text', x, y);
   };
 
   const handleContextMenu = (e: Konva.KonvaEventObject<PointerEvent>) => {
@@ -617,15 +782,6 @@ export function OverlayEditor({
     if (hit) {
       beginEdit(hit);
       return;
-    }
-
-    // Right-click empty page while Text/Date/Initials is armed → place & type
-    if (
-      activeTool === 'text' ||
-      activeTool === 'date' ||
-      activeTool === 'initials'
-    ) {
-      placeTextLikeTool(activeTool, x, y);
     }
   };
 
@@ -715,7 +871,11 @@ export function OverlayEditor({
   };
 
   return (
-    <div className="overlay-editor-root" style={{ position: 'absolute', inset: 0 }}>
+    <div
+      ref={rootRef}
+      className="overlay-editor-root"
+      style={{ position: 'absolute', inset: 0 }}
+    >
     <Stage
       ref={stageRef}
       width={stageW}
@@ -724,6 +884,8 @@ export function OverlayEditor({
       listening={interactive}
       onClick={handleStageClick}
       onTap={handleStageClick}
+      onDblClick={handleStageDblClick}
+      onDblTap={handleStageDblClick}
       onContextMenu={handleContextMenu}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
@@ -747,8 +909,15 @@ export function OverlayEditor({
                 e.cancelBubble = true;
                 const additive =
                   e.evt.shiftKey || e.evt.ctrlKey || e.evt.metaKey;
-                // Single click selects so the box can be dragged; double-click types.
                 onSelect([overlay.id], additive);
+              }}
+              onEdit={(e) => {
+                e.cancelBubble = true;
+                if (!interactive) return;
+                const additive =
+                  e.evt.shiftKey || e.evt.ctrlKey || e.evt.metaKey;
+                onSelect([overlay.id], additive);
+                beginEdit(overlay);
               }}
               onDblClick={(e) => {
                 e.cancelBubble = true;
@@ -838,10 +1007,45 @@ export function OverlayEditor({
           ),
         )}
 
-        {interactive && !editingId ? (
+        {interactive && !editingId && needsTransformer ? (
           <Transformer
             ref={trRef}
             rotateEnabled
+            rotationSnaps={[0, 90, 180, 270]}
+            rotationSnapTolerance={12}
+            resizeEnabled
+            keepRatio={!textOnlyChrome}
+            borderEnabled={!textOnlyChrome}
+            rotateLineVisible={!textOnlyChrome}
+            rotateAnchorOffset={textOnlyChrome ? 10 : 50}
+            anchorSize={textOnlyChrome ? 12 : 10}
+            ignoreStroke={textOnlyChrome}
+            anchorStyleFunc={
+              textOnlyChrome
+                ? (anchor) => {
+                    if (anchor.hasName('rotater')) {
+                      anchor.setAttrs({
+                        width: 7,
+                        height: 7,
+                        offsetX: 3.5,
+                        offsetY: 3.5,
+                        cornerRadius: 8,
+                        fill: 'rgba(255, 255, 255, 0.85)',
+                        stroke: 'rgba(47, 127, 212, 0.55)',
+                        strokeWidth: 1,
+                      });
+                      return;
+                    }
+                    // Stretch points stay usable on the outline, just not drawn.
+                    anchor.setAttrs({
+                      fill: 'rgba(47, 127, 212, 0.01)',
+                      stroke: 'rgba(0, 0, 0, 0)',
+                      strokeWidth: 0,
+                      hitStrokeWidth: 16,
+                    });
+                  }
+                : undefined
+            }
             boundBoxFunc={(oldBox, newBox) => {
               if (newBox.width < 4 || newBox.height < 4) return oldBox;
               return newBox;
@@ -872,7 +1076,7 @@ export function OverlayEditor({
           lineHeight: 1.2,
           margin: 0,
           padding: '1px 2px',
-          border: '1px solid rgba(47, 127, 212, 0.85)',
+          border: '1px solid rgba(47, 127, 212, 0.7)',
           borderRadius: 2,
           background: 'transparent',
           caretColor: editingOverlay.color ?? '#111111',
@@ -891,8 +1095,7 @@ export function OverlayEditor({
           e.stopPropagation();
           if (e.key === 'Escape') {
             e.preventDefault();
-            setEditingId(null);
-            onToolConsumed?.();
+            cancelEdit();
             return;
           }
           if (e.key === 'Enter' && !e.shiftKey) {

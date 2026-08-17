@@ -1,6 +1,6 @@
 [package]
 name = "pdf_editor"
-version = "1.4.4"
+version = "1.4.5"
 description = "pdf_editor — desktop PDF viewer and editor"
 authors = ["JW"]
 license = "MIT"

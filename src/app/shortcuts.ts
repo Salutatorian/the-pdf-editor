@@ -224,6 +224,18 @@ export const SHORTCUT_HELP: ReadonlyArray<ShortcutHelpEntry> = [
   },
   { action: 'modeAdd', label: 'Add mode', keys: 'Alt+3', category: 'Modes' },
   {
+    action: 'modeAdd',
+    label: 'Place text at cursor',
+    keys: 'T (hover the page)',
+    category: 'Modes',
+  },
+  {
+    action: 'modeAdd',
+    label: 'Place text (Add mode)',
+    keys: 'Double-click empty page',
+    category: 'Modes',
+  },
+  {
     action: 'modeSign',
     label: 'Sign mode',
     keys: 'Alt+4',

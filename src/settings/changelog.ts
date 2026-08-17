@@ -18,6 +18,25 @@ export type ChangelogRelease = {
  */
 export const CHANGELOG: readonly ChangelogRelease[] = [
   {
+    version: '1.4.5',
+    title: 'Safer Add Text',
+    date: '2026-08-18',
+    items: [
+      {
+        kind: 'improved',
+        text: 'Press T (or double-click the page) to place text at the cursor — a single click no longer creates extra boxes',
+      },
+      {
+        kind: 'improved',
+        text: 'Click a text box to move it; double-click to type. Empty unused boxes disappear on their own',
+      },
+      {
+        kind: 'improved',
+        text: 'One subtle blue outline: drag the edges to resize, drag the tiny handle to rotate (snaps to 0° / 90° / 180° / 270°)',
+      },
+    ],
+  },
+  {
     version: '1.4.4',
     title: 'Form fill that matches what you see',
     date: '2026-08-17',
